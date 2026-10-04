@@ -345,6 +345,17 @@ func (s *Server) registerRoutes() {
 	admin.PUT("/agent/keys/:id", s.handleUpdateAgentKey)
 	admin.DELETE("/agent/keys/:id", s.handleDeleteAgentKey)
 
+	// agent 的独立上游配置（base_url + api_key + 模型）。
+	// 独立于「运行配置」：后者是行为约定（用什么模型、说什么话），
+	// 这一项是"往哪发请求、用哪把凭据"。混在一起会出现一个尴尬的循环依赖——
+	// 改地址要改模型，改模型又影响地址可用性。
+	admin.GET("/agent/endpoint", s.handleGetAgentEndpoint)
+	admin.PUT("/agent/endpoint", s.handleUpdateAgentEndpoint)
+
+	// 加速器：转发性能的配置与效果视图（延迟选路 / 上游缓存 / 连接池）
+	admin.GET("/accelerator", s.handleGetAccelerator)
+	admin.PUT("/accelerator", s.handleUpdateAccelerator)
+
 	// 上游渠道类型目录：后台新建/编辑渠道时据此做「选类型 → 展开该类型必填项」
 	// 的触发式渲染，因此新增上游类型不需要改前端代码。
 	admin.GET("/channel-types", s.handleChannelTypes)

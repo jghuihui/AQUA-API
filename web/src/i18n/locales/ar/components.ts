@@ -254,6 +254,7 @@ export default {
       maintenanceMonitor: 'المراقبة والنسخ الاحتياطي',
       settings: 'الإعدادات',
       agent: 'مساعد الذكاء الاصطناعي',
+      accelerator: 'مسرّع الأداء',
     },
     console: {
       console: 'وحدة التحكم',

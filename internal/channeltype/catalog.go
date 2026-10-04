@@ -48,7 +48,7 @@ func Types() []Type {
 			Key: "openai", Label: "OpenAI 官方", Category: CategoryText,
 			Protocol: ProtocolOpenAI, AuthMode: AuthBearer,
 			DefaultBaseURL:    "https://api.openai.com/v1",
-			Caps:              CapChat | CapStream | CapTools | CapVision | CapReasoning,
+			Caps:              CapChat | CapStream | CapTools | CapVision | CapReasoning | CapPromptCache,
 			SupportsModelList: true, Available: true,
 			Notes: "官方 OpenAI，是绝大多数下游工具的默认协议，也可作为一切兼容实现的对照基准。",
 		},
@@ -69,8 +69,11 @@ func Types() []Type {
 		{
 			Key: "deepseek", Label: "DeepSeek 深度求索", Category: CategoryText,
 			Protocol: ProtocolOpenAI, AuthMode: AuthBearer,
-			DefaultBaseURL:    "https://api.deepseek.com/v1",
-			Caps:              CapChat | CapStream | CapTools | CapReasoning,
+			DefaultBaseURL: "https://api.deepseek.com/v1",
+			// DeepSeek 的上下文缓存是【自动】的：命中不需要客户端任何标记，
+			// 重复的前缀直接命中。因此这里的能力位只用于"告知站长此上游能吃到缓存收益"，
+			// 转发侧不会给它注入任何请求体字段。
+			Caps:              CapChat | CapStream | CapTools | CapReasoning | CapPromptCache,
 			SupportsModelList: true, Available: true,
 			Notes: "以推理与代码见长的国产模型，完全兼容 OpenAI Chat Completions。",
 		},
@@ -96,7 +99,7 @@ func Types() []Type {
 			Key: "dashscope", Label: "阿里云百炼（通义千问）", Category: CategoryText,
 			Protocol: ProtocolOpenAI, AuthMode: AuthBearer,
 			DefaultBaseURL:    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-			Caps:              CapChat | CapStream | CapTools | CapVision | CapReasoning,
+			Caps:              CapChat | CapStream | CapTools | CapVision | CapReasoning | CapPromptCache,
 			SupportsModelList: true, Available: true,
 			Notes: "通过 compatible-mode 暴露 OpenAI 兼容接口；其原生 DashScope 协议与 OpenAI 并不一致。",
 		},

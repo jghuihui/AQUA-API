@@ -413,7 +413,7 @@ func (r *Relay) forwardWithFallback(w http.ResponseWriter, req *http.Request, mo
 	var lastFailure upstreamFailure
 retryLoop:
 	for keyAttempts := 1; keyAttempts <= maxKeyLevelAttempts; keyAttempts++ {
-		ch := pickCandidate(candidates, excludedChannels)
+		ch := r.pickCandidate(candidates, excludedChannels)
 		if ch == nil {
 			// 候选渠道已全部放弃，退出循环统一报错
 			break
@@ -870,7 +870,7 @@ func (r *Relay) hasOtherChannel(candidates []*model.Channel, excluded map[uint64
 		probe[id] = struct{}{}
 	}
 	probe[currentID] = struct{}{}
-	return pickCandidate(candidates, probe) != nil
+	return r.pickCandidate(candidates, probe) != nil
 }
 
 // acquireKey 记录在途占用（in_flight + 1），返回是否真的占上了。
@@ -977,7 +977,22 @@ func (r *Relay) forwardChat(w http.ResponseWriter, req *http.Request, target for
 	// 上游鉴权失败，并把网关令牌泄露给第三方上游。
 	upReq.Header = built.Header
 
-	resp, err := r.client.Do(upReq)
+	// Expect: 100-continue（仅加速器显式开启时）。
+	//
+	// 【为什么只在开启时才加这个头】
+	//	Go 的 http.Transport 只在【请求头里有 Expect: 100-continue】且
+	//	Transport.ExpectContinueTimeout > 0 时才发探测，两者必须成对出现。
+	//	关闭时什么都不加，请求与加速器引入前逐字节一致。
+	//
+	// 【它的收益与代价】
+	//	收益：上游正要返回 429/403（如额度耗尽、密钥失效）时，
+	//		正文不会白传一遍 —— 大请求体可能有几百 KB。
+	//	代价：每个请求多一个 RTT。对小请求是净损失，所以默认关闭。
+	if accel := r.accelerator(); accel.Enabled && accel.Expect100Continue {
+		upReq.Header.Set("Expect", "100-continue")
+	}
+
+	resp, err := r.httpClient().Do(upReq)
 	if err != nil {
 		// 连接层面失败（超时、连接被拒、TLS 失败）：未写出任何响应，可安全重试。
 		//

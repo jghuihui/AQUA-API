@@ -122,7 +122,7 @@ func (r *Relay) ProbeChannel(ctx context.Context, ch *model.Channel, apiKey, mod
 	}
 	req.Header = built.Header
 
-	client := r.client
+	client := r.httpClient()
 	if client == nil {
 		client = http.DefaultClient
 	}

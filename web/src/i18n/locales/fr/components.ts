@@ -263,6 +263,7 @@ export default {
       maintenanceMonitor: 'Supervision',
       settings: 'Paramètres',
       agent: 'Assistant IA',
+      accelerator: 'Accélérateur',
     },
     console: {
       console: 'Console',

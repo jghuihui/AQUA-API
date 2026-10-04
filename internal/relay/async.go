@@ -157,7 +157,7 @@ func NewTaskService(tasks model.TaskRepository, r *Relay) *TaskService {
 	return &TaskService{
 		tasks:     tasks,
 		relay:     r,
-		providers: newBuiltinProviders(r.client),
+		providers: newBuiltinProviders(r.httpClient),
 	}
 }
 
@@ -490,7 +490,7 @@ func (s *TaskService) pickTarget(ctx context.Context, group, modelName string) (
 	// 逐一尝试候选渠道，直到找到一个有可用凭据的
 	excluded := make(map[uint64]struct{})
 	for range candidates {
-		ch := pickCandidate(candidates, excluded)
+		ch := s.relay.pickCandidate(candidates, excluded)
 		if ch == nil {
 			break
 		}

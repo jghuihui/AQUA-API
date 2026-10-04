@@ -114,7 +114,7 @@ func (r *Relay) ProbeChannelLatency(ctx context.Context, ch *model.Channel, apiK
 	}
 	req.Header = built.Header
 
-	client := r.client
+	client := r.httpClient()
 	if client == nil {
 		client = http.DefaultClient
 	}

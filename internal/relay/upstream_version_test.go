@@ -1,16 +1,19 @@
 // 本文件钉住「上游地址与端点路径的版本段去重」行为。
 //
 // 意图（Why）：
-//   渠道目录里大量 OpenAI 兼容类型的默认地址自带版本段（api.openai.com/v1、
-//   智谱 /api/paas/v4、百炼 compatible-mode/v1），而端点常量也带 /v1 前缀，
-//   直接拼接会产生 /v1/v1/chat/completions 这类重复地址（上游 404）。
-//   joinUpstreamURL 负责去重，本文件保证它只在该去重的时候去重。
+//
+//	渠道目录里大量 OpenAI 兼容类型的默认地址自带版本段（api.openai.com/v1、
+//	智谱 /api/paas/v4、百炼 compatible-mode/v1），而端点常量也带 /v1 前缀，
+//	直接拼接会产生 /v1/v1/chat/completions 这类重复地址（上游 404）。
+//	joinUpstreamURL 负责去重，本文件保证它只在该去重的时候去重。
 //
 // 流转（Flow）：
-//   buildUpstreamRequest / FetchModels → joinUpstreamURL(base, path)
+//
+//	buildUpstreamRequest / FetchModels → joinUpstreamURL(base, path)
 //
 // 扩展（Extend）：
-//   新增非 /v1 风格版本段（如 /v2）的类型时，在此补一条用例即可。
+//
+//	新增非 /v1 风格版本段（如 /v2）的类型时，在此补一条用例即可。
 package relay
 
 import (

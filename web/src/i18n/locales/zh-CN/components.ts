@@ -258,6 +258,7 @@ export default {
       maintenanceMonitor: '运维监控',
       settings: '系统设置',
       agent: 'AI 助手',
+      accelerator: '加速器',
     },
     console: {
       console: '控制台',

@@ -72,9 +72,9 @@ const (
 // 把 Midjourney 排在前面，是因为它是真正的异步接口，更适合任务语义；
 // openai_image 属于兼容性兜底；custom_async 放在最后作为"通用兜底"——
 // 它需要站长显式配置路径才可用，因此不应抢占更专用适配器的自动选择。
-func newBuiltinProviders(client *http.Client) []TaskProvider {
+func newBuiltinProviders(client httpClientFn) []TaskProvider {
 	if client == nil {
-		client = http.DefaultClient
+		client = func() *http.Client { return http.DefaultClient }
 	}
 	return []TaskProvider{
 		&midjourneyProvider{client: client},
@@ -87,7 +87,15 @@ func newBuiltinProviders(client *http.Client) []TaskProvider {
 
 // midjourneyProvider 对接 /mj/submit/{action} + /mj/task/{id}/fetch 形态的上游。
 type midjourneyProvider struct {
-	client *http.Client
+	// client 是取 HTTP 客户端的函数而不是 client 本身。
+	//
+	// 原因：加速器可以热替换客户端（改连接池参数需换 Transport），
+	// 而 provider 是在服务启动时构造的。若这里存 client 指针，
+	// 站长改完加速设置后异步任务仍会用旧连接池 —— 表现为"改了没反应"。
+	// 取函数则每次都能拿到当前的客户端。
+	//
+	// 为 nil 时由 httpClientFn 兜底成 http.DefaultClient。
+	client httpClientFn
 }
 
 // Name 返回适配器名。
@@ -145,7 +153,7 @@ func (p *midjourneyProvider) Submit(ctx context.Context, req *TaskRequest, ch *m
 		return nil, err
 	}
 
-	resp, err := p.client.Do(upReq)
+	resp, err := p.client().Do(upReq)
 	if err != nil {
 		return nil, fmt.Errorf("请求上游失败: %w", err)
 	}
@@ -191,7 +199,7 @@ func (p *midjourneyProvider) Poll(ctx context.Context, task *model.Task, ch *mod
 		return nil, err
 	}
 
-	resp, err := p.client.Do(upReq)
+	resp, err := p.client().Do(upReq)
 	if err != nil {
 		return nil, fmt.Errorf("查询上游任务失败: %w", err)
 	}
@@ -323,7 +331,15 @@ const imagesGenerationsPath = "/v1/images/generations"
 
 // openAIImageProvider 对接 OpenAI 兼容的 /v1/images/generations。
 type openAIImageProvider struct {
-	client *http.Client
+	// client 是取 HTTP 客户端的函数而不是 client 本身。
+	//
+	// 原因：加速器可以热替换客户端（改连接池参数需换 Transport），
+	// 而 provider 是在服务启动时构造的。若这里存 client 指针，
+	// 站长改完加速设置后异步任务仍会用旧连接池 —— 表现为"改了没反应"。
+	// 取函数则每次都能拿到当前的客户端。
+	//
+	// 为 nil 时由 httpClientFn 兜底成 http.DefaultClient。
+	client httpClientFn
 }
 
 // Name 返回适配器名。
@@ -362,7 +378,7 @@ func (p *openAIImageProvider) Submit(ctx context.Context, req *TaskRequest, ch *
 		return nil, err
 	}
 
-	resp, err := p.client.Do(upReq)
+	resp, err := p.client().Do(upReq)
 	if err != nil {
 		return nil, fmt.Errorf("请求上游失败: %w", err)
 	}

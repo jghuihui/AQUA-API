@@ -37,6 +37,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/LTZY-ACU/ltzy-api/internal/corpus"
@@ -144,6 +145,83 @@ type Relay struct {
 	corpusSamples model.CorpusRepository
 	// speeds 为模型测速结果仓储（可选）。为 nil 时 auto 路由不可用。
 	speeds model.ModelSpeedRepository
+	// accel 为加速器配置的原子快照（可选，热更新，见 SetAccelerator）。
+	//
+	// 为什么用 atomic 而不是每次读设置表：这是转发热路径，
+	// 每个请求多一次 SQL 查询会把加速收益整个吃掉。
+	// 为什么用指针而不是值：值类型在 atomic.Value 里必须处处相同，
+	// 而这里要能表达"尚未设置"（nil）与"设置为默认值"（非 nil）的区别。
+	accel atomic.Pointer[model.AcceleratorSetting]
+	// transport 为可热替换的 HTTP 客户端（见 SetAccelerator 的注释）。
+	// 为 nil 表示"用构造期创建的 client"。
+	transport atomic.Pointer[http.Client]
+}
+
+// httpClient 返回当前生效的 HTTP 客户端。
+//
+// 转发路径每次发请求都要经过它，因此这里是"是否已热更新"的唯一判定点。
+func (r *Relay) httpClient() *http.Client {
+	if r == nil {
+		return nil
+	}
+	if c := r.transport.Load(); c != nil {
+		return c
+	}
+	return r.client
+}
+
+// SetAccelerator 热更新加速器配置。
+//
+// 放在 setter 而不是构造参数里：站长改完设置要立刻生效，
+// 而重启服务去生效一个开关是不可接受的（那会让人以为"没保存成功"）。
+//
+// 【同时重建 Transport —— 这是必须的，不是顺手做的】
+//
+//	http.Transport 的连接池参数只在【建立连接时】读取。
+//	改完设置若只是存下配置、不换 Transport，新参数永远不生效，
+//	而界面会显示"已保存 64"、实际仍按 20 运行 ——
+//	一个"看起来生效了却不生效"的 bug，比没有这个功能更糟。
+//
+// 换 Transport 的代价是丢弃空闲连接（下次请求重新握手），
+// 影响仅限一次，且只在站长改设置的那一刻发生。
+func (r *Relay) SetAccelerator(s model.AcceleratorSetting) {
+	if r == nil {
+		return
+	}
+	clamped := model.LoadAcceleratorSetting(model.AcceleratorValuesToMap(s))
+	r.accel.Store(&clamped)
+
+	// headerTimeout 需要沿用当前客户端的值：构造期可能传了非默认值，
+	// 重新建 Transport 时若回落成默认 300 秒，会悄悄改掉原有的超时策略。
+	headerTimeout := defaultResponseHeaderWait
+	if r.client != nil {
+		if tr, ok := r.client.Transport.(*http.Transport); ok && tr.ResponseHeaderTimeout > 0 {
+			headerTimeout = tr.ResponseHeaderTimeout
+		}
+	}
+	r.transport.Store(&http.Client{
+		Transport: newUpstreamTransport(clamped, headerTimeout),
+	})
+}
+
+// accelerator 返回当前生效的加速器配置。
+//
+// 未设置时返回"关闭状态"的默认值 —— 此时所有 ratio 为 0、
+// 缓存透传关闭，选路行为与加速器引入前完全一致。
+func (r *Relay) accelerator() model.AcceleratorSetting {
+	if r == nil {
+		return model.DefaultAcceleratorSetting()
+	}
+	p := r.accel.Load()
+	if p == nil {
+		return model.DefaultAcceleratorSetting()
+	}
+	return *p
+}
+
+// AcceleratorSetting 供后台接口与测试读取当前配置。
+func (r *Relay) AcceleratorSetting() model.AcceleratorSetting {
+	return r.accelerator()
 }
 
 // New 创建转发引擎。
@@ -202,34 +280,97 @@ func New(channels model.ChannelRepository, opts Options) *Relay {
 		corpusSamples:   opts.CorpusSamples,
 		speeds:          opts.ModelSpeeds,
 		client: &http.Client{
-			Transport: &http.Transport{
-				// 走系统代理环境变量：便于在受限网络中经代理访问上游
-				Proxy: http.ProxyFromEnvironment,
-
-				// 建连前的地址护栏：拒绝链路本地与云元数据地址（见 netguard 包）。
-				// 放在拨号层而不是只校验 URL：域名可能在"校验通过"之后才解析到内网地址。
-				DialContext: (&net.Dialer{
-					Timeout:   30 * time.Second,
-					KeepAlive: 30 * time.Second,
-					Control:   netguard.DialControl,
-				}).DialContext,
-
-				// 连接复用：网关是高频转发场景，复用连接可显著降低延迟
-				MaxIdleConns:          100,
-				MaxIdleConnsPerHost:   defaultMaxIdleConnsPerHost,
-				IdleConnTimeout:       defaultIdleConnTimeout,
-				TLSHandshakeTimeout:   defaultTLSHandshakeTimeout,
-				ExpectContinueTimeout: 1 * time.Second,
-
-				// 上游"必须开始响应"的时限，避免连接挂死占用资源
-				ResponseHeaderTimeout: headerTimeout,
-
-				// 上游普遍支持 HTTP/2，开启可提升多路复用效率
-				ForceAttemptHTTP2: true,
-			},
+			Transport: newUpstreamTransport(model.DefaultAcceleratorSetting(), headerTimeout),
 		},
 	}
 }
+
+// newUpstreamTransport 按加速器配置构造上游 HTTP 传输层。
+//
+// 【为什么每次配置变更都要换一个新的 Transport】
+//
+//	http.Transport 的连接池字段（MaxIdleConnsPerHost、IdleConnTimeout）
+//	在【建立连接时】被读取，已经建立的连接不会因为改了字段而调整。
+//	所以要让新参数生效，必须换 Transport 实例。
+//	代价是换的瞬间会丢弃空闲连接（需要重新握手），影响仅限一次；
+//	收益是参数立刻生效，不需要重启服务。
+//
+// 【MaxIdleConns 与 MaxIdleConnsPerHost 的关系】
+//
+//	MaxIdleConns 是全局上限，MaxIdleConnsPerHost 是单主机上限，
+//	实际生效的是【两者的较小值】。所以只调后者、而前者仍是 100 的话，
+//	单个上游主机最多也只能用到 100 —— 提高 PerHost 到 64 必须同时
+//	把全局上限提上去，否则这个参数是无效的。
+//
+// 【为什么 IdleConnTimeout 保持默认 90 秒可以】
+//
+//	上流的连接上限通常远高于本站的空闲连接数，回收慢一点不构成压力；
+//	而太短会让连接在两次请求之间被回收，等于关掉了复用 ——
+//	那是"看起来在调优、实际更慢"的典型。
+func newUpstreamTransport(accel model.AcceleratorSetting, headerTimeout time.Duration) *http.Transport {
+	// MaxIdleConns 取 PerHost 的 4 倍：一个网关通常打到少数几个上游主机，
+	// 全局上限必须显著大于单主机上限，否则单主机上限调大也无效。
+	maxIdlePerHost := accel.MaxIdleConnsPerHost
+	globalIdle := maxIdlePerHost * 4
+	if globalIdle < 100 {
+		globalIdle = 100
+	}
+
+	return &http.Transport{
+		// 走系统代理环境变量：便于在受限网络中经代理访问上游
+		Proxy: http.ProxyFromEnvironment,
+
+		// 建连前的地址护栏：拒绝链路本地与云元数据地址（见 netguard 包）。
+		// 放在拨号层而不是只校验 URL：域名可能在"校验通过"之后才解析到内网地址。
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			Control:   netguard.DialControl,
+		}).DialContext,
+
+		// 连接复用：网关是高频转发场景，复用连接可显著降低延迟。
+		// MaxIdleConnsPerHost 从改造前的 20 提到 64（见 model.MaxIdleConnsPerHostDefault）。
+		MaxIdleConns:        globalIdle,
+		MaxIdleConnsPerHost: maxIdlePerHost,
+		IdleConnTimeout:     time.Duration(accel.IdleConnTimeoutMS) * time.Millisecond,
+		TLSHandshakeTimeout: defaultTLSHandshakeTimeout,
+
+		// Expect: 100-continue 的等待上限。
+		//
+		// 仅在显式开启时生效（见 SetAccelerator 的注释）：
+		// 它让"上游正要返回 429/403 时不必再发正文"，但会给每个请求
+		// 多一个 RTT，对小请求是净损失，因此默认关闭。
+		// 开启时上限取 1 秒：超过这个时间客户端就放弃等待、直接发正文，
+		// 避免上游不响应 100-continue 时把请求卡死。
+		ExpectContinueTimeout: expectContinueTimeout(accel),
+
+		// 上游"必须开始响应"的时限，避免连接挂死占用资源
+		ResponseHeaderTimeout: headerTimeout,
+
+		// 上游普遍支持 HTTP/2，开启可提升多路复用效率
+		ForceAttemptHTTP2: true,
+	}
+}
+
+// expectContinueTimeout 返回 Expect: 100-continue 的等待上限。
+//
+// 返回 0 表示"不启用"—— 这是 http.Transport 识别"关闭"的约定值
+// （设置成任何正数都会让 Go 对每个请求发 100-continue 探测）。
+//
+// 因此开关本身也必须落在这里：只提供 ExpectContinueTimeout 而不加请求头，
+// 就变成了"每个请求多等一次却什么都不省"，是纯负收益。
+func expectContinueTimeout(accel model.AcceleratorSetting) time.Duration {
+	if !accel.Enabled || !accel.Expect100Continue {
+		return 0
+	}
+	return time.Second
+}
+
+// httpClientFn 是"取当前 HTTP 客户端"的函数类型。
+//
+// 用于需要持有客户端、但客户端可能被热替换的场合（如异步任务 provider）：
+// 存指针会在热更新后变成过期快照，表现为"改了设置没反应"。
+type httpClientFn func() *http.Client
 
 // listCandidates 查询指定分组的启用渠道，并过滤出支持该模型的候选。
 //
@@ -376,7 +517,7 @@ func (r *Relay) SelectChannel(ctx context.Context, group, modelName string) (*mo
 		return nil, err
 	}
 
-	ch := pickCandidate(candidates, nil)
+	ch := r.pickCandidate(candidates, nil)
 	if ch == nil {
 		return nil, fmt.Errorf("%w（分组=%s, 模型=%s）", ErrNoAvailableChannel, group, modelName)
 	}
@@ -388,11 +529,20 @@ func (r *Relay) SelectChannel(ctx context.Context, group, modelName string) (*mo
 // 策略：
 //  1. 只考虑【最高优先级】的一层。优先级是运维表达"先用谁"的强意图
 //     （如先用便宜的、再用贵的），不允许被权重跨越；
-//  2. 层内按权重随机，避免流量全部压在同层第一个渠道上；
+//  2. 层内按【有效权重】随机，避免流量全部压在同层第一个渠道上；
+//     有效权重 = 渠道权重 × (1-ratio) + 延迟得分 × ratio，
+//     ratio 由加速器配置给出，为 0 时与改造前逐字节一致；
 //  3. 该层被排除殆尽时，自然回落到下一优先级层（candidates 已按优先级降序）。
 //
 // 候选已耗尽时返回 nil（调用方据此判断"无更多可尝试渠道"）。
-func pickCandidate(candidates []*model.Channel, excluded map[uint64]struct{}) *model.Channel {
+//
+// 【为什么优先级不受延迟影响】
+//
+//	优先级是站长手工表达的强意图（"先用便宜的，再用贵的"），
+//	它同时也是成本控制手段。延迟快但价格贵两倍的渠道，
+//	绝不能因为"更快"就自动吃满流量 —— 那等于让加速器替站长做采购决策。
+//	因此延迟只在同优先级层内影响概率，不跨层。
+func (r *Relay) pickCandidate(candidates []*model.Channel, excluded map[uint64]struct{}) *model.Channel {
 	var topPriority int
 	hasTop := false
 
@@ -415,10 +565,55 @@ func pickCandidate(candidates []*model.Channel, excluded map[uint64]struct{}) *m
 	if len(tier) == 0 {
 		return nil
 	}
-	return weightedPick(tier)
+	return pickByWeight(tier, r.acceleratorRatio())
 }
 
-// weightedPick 在同优先级的一组渠道中按权重随机挑选一个。
+// acceleratorRatio 返回当前生效的延迟权重占比。
+//
+// 每次请求读一次缓存的设置（见 acceleratorSetting 的 atomic 存储），
+// 而不是查库：这是转发热路径，一次额外的 SQL 会把加速收益吃掉。
+//
+// Relay 未接入设置（单测里常见）时返回 0，即退化为纯权重 —— 与改造前一致。
+func (r *Relay) acceleratorRatio() float64 {
+	if r == nil {
+		return 0
+	}
+	return r.accelerator().LatencyWeightRatio()
+}
+
+// pickCandidateForTest 是不依赖 Relay 的选路入口，仅供单元测试使用。
+//
+// 之所以单独开一个而不是让测试构造 Relay：
+// 选路算法是纯函数，用真实的 Relay 测它需要为一堆无关的依赖（仓储、OAuth、
+// 计费）准备环境，而那些依赖与"选哪个渠道"毫无关系。
+func pickCandidateForTest(candidates []*model.Channel, ratio float64) *model.Channel {
+	if len(candidates) == 0 {
+		return nil
+	}
+	var topPriority int
+	hasTop := false
+	tier := make([]*model.Channel, 0, len(candidates))
+	for _, ch := range candidates {
+		if !hasTop {
+			topPriority = ch.Priority
+			hasTop = true
+		}
+		if ch.Priority != topPriority {
+			break
+		}
+		tier = append(tier, ch)
+	}
+	if len(tier) == 0 {
+		return nil
+	}
+	return pickByWeight(tier, ratio)
+}
+
+// weightedPick 在同优先级的一组渠道中按渠道权重随机挑选一个。
+//
+// 这是加速器引入【之前】的行为，现在保留下来有两个用途：
+//  1. ratio == 0 时的语义基准（见 TestWeightedPick_关闭加速器时与加权随机同分布）；
+//  2. 无加速器配置时的回退路径。
 //
 // 算法：累加权重后取一个随机数 r ∈ [0, total)，顺序累减权重，
 // 首次使累计值小于 0 的渠道即中选。权重越大命中概率越高。

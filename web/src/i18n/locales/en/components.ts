@@ -256,6 +256,7 @@ export default {
       maintenanceMonitor: 'Maintenance',
       settings: 'Settings',
       agent: 'AI Assistant',
+      accelerator: 'Accelerator',
     },
     console: {
       console: 'Console',

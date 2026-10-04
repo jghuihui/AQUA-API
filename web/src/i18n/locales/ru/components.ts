@@ -263,6 +263,7 @@ export default {
       maintenanceMonitor: 'Мониторинг и резервные копии',
       settings: 'Настройки',
       agent: 'ИИ-помощник',
+      accelerator: 'Ускоритель',
     },
     console: {
       console: 'Консоль',

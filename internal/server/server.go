@@ -94,6 +94,16 @@ type Deps struct {
 	// 未接入密钥仓储时若默认放行，等于开了一个不需要 key 的公网接口。
 	AgentKeys model.AgentKeyRepository
 
+	// AgentEndpoint 是 agent 独立上游配置仓储（base_url + api_key + 模型）。
+	//
+	// 站长可以为 agent 单独配一套上游，而不必借用站点渠道——这样助手与业务
+	// 流量不抢配额、可以单独挑便宜的模型、也可以指向一个支持工具调用的
+	// 第三方上游。
+	//
+	// 为 nil 时 agent 退回"借用渠道"，即本特性出现前的行为：
+	// 这条回退是刻意的，让未接入该仓储的部署（测试、部分二次开发）行为不变。
+	AgentEndpoint model.AgentEndpointRepository
+
 	// Metrics 是进程内指标注册表。
 	//
 	// 为什么由外部传入而不是服务内部创建：告警派发器也要往同一张表里写
@@ -327,6 +337,13 @@ func New(deps Deps) *Server {
 	// 进程级指标：只能在拿到 s 之后注册（运行时长要以 startedAt 为基准）。
 	s.registerProcessMetrics()
 	s.registerRoutes()
+
+	// 加速器配置下发到转发引擎。
+	//
+	// 必须在 registerRoutes 之后、对外服务之前：否则加速器要等到站长
+	// 手动改一次设置才会生效，而界面显示的却是"已开启"——
+	// 一个"显示与实际不符"的 bug 比没有这个功能更糟。
+	applyAcceleratorFromSettings(context.Background(), s)
 
 	// 注册前端静态资源与 SPA 回退。
 	// 必须在 registerRoutes 之后：SPA 回退依赖 gin 的 NoRoute 钩子，

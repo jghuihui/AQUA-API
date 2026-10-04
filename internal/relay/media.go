@@ -287,7 +287,7 @@ func (r *Relay) forwardMedia(w http.ResponseWriter, req *http.Request,
 
 retryLoop:
 	for keyAttempts := 1; keyAttempts <= maxKeyLevelAttempts; keyAttempts++ {
-		ch := pickCandidate(candidates, excludedChannels)
+		ch := r.pickCandidate(candidates, excludedChannels)
 		if ch == nil {
 			break
 		}
@@ -424,7 +424,7 @@ func (r *Relay) forwardMediaOnce(w http.ResponseWriter, req *http.Request,
 	}
 	upReq.Header = built.Header
 
-	resp, err := r.client.Do(upReq)
+	resp, err := r.httpClient().Do(upReq)
 	if err != nil {
 		// 连接失败与密钥无关，可安全换渠道重试。
 		return forwardRetryChannel

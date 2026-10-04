@@ -59,7 +59,7 @@ func TestCustomAsyncProvider_提交轮询成功_含结果URL提取(t *testing.T)
 	}))
 	defer upstream.Close()
 
-	p := &customAsyncProvider{client: upstream.Client()}
+	p := &customAsyncProvider{client: func() *http.Client { return upstream.Client() }}
 	ch := customTestChannel(upstream.URL, "test-key", map[string]string{
 		cfgCustomSubmitPath:    "/v1/submit",
 		cfgCustomPollPath:      "/v1/tasks/{id}",
@@ -114,7 +114,7 @@ func TestCustomAsyncProvider_未知状态保持进行中(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p := &customAsyncProvider{client: upstream.Client()}
+	p := &customAsyncProvider{client: func() *http.Client { return upstream.Client() }}
 	ch := customTestChannel(upstream.URL, "k", map[string]string{
 		cfgCustomPollPath:   "/tasks/{id}",
 		cfgCustomStatusPath: "data.status",
@@ -160,7 +160,7 @@ func TestCustomAsyncProvider_状态映射配置生效(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			p := &customAsyncProvider{client: upstream.Client()}
+			p := &customAsyncProvider{client: func() *http.Client { return upstream.Client() }}
 			ch := customTestChannel(upstream.URL, "k", map[string]string{
 				cfgCustomPollPath:   "/tasks/{id}",
 				cfgCustomStatusPath: "status",
@@ -189,7 +189,7 @@ func TestCustomAsyncProvider_提交失败与上游5xx错误路径(t *testing.T) 
 	}))
 	defer upstream.Close()
 
-	p := &customAsyncProvider{client: upstream.Client()}
+	p := &customAsyncProvider{client: func() *http.Client { return upstream.Client() }}
 	ch := customTestChannel(upstream.URL, secretKey, map[string]string{
 		cfgCustomSubmitPath: "/v1/submit",
 		cfgCustomPollPath:   "/tasks/{id}",
@@ -232,7 +232,7 @@ func TestCustomAsyncProvider_失败结果脱敏(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	p := &customAsyncProvider{client: upstream.Client()}
+	p := &customAsyncProvider{client: func() *http.Client { return upstream.Client() }}
 	ch := customTestChannel(upstream.URL, secretKey, map[string]string{
 		cfgCustomPollPath:   "/tasks/{id}",
 		cfgCustomStatusPath: "status",

@@ -17,6 +17,7 @@
 //	  handler 的接线由路由核对测试覆盖）
 //
 // 扩展（Extend）：
+//
 //	调整健康判定口径时，请同步更新本文件与 handler_channel_health.go 的注释——
 //	两处口径必须一致，注释是唯一能提醒后来者"为什么这么判"的地方。
 package server
@@ -43,7 +44,7 @@ func TestChannelIsHealthy(t *testing.T) {
 		{
 			name: "启用+全探针通过+有延迟=健康",
 			item: channelHealthItemDTO{
-				Status:    int(model.ChannelStatusEnabled),
+				Status:     int(model.ChannelStatusEnabled),
 				ProbeTotal: 8, ProbeOK: 8, LatencyMS: 220,
 			},
 			want: true,
@@ -60,7 +61,7 @@ func TestChannelIsHealthy(t *testing.T) {
 		{
 			name: "有失败探针=不健康",
 			item: channelHealthItemDTO{
-				Status:    int(model.ChannelStatusEnabled),
+				Status:     int(model.ChannelStatusEnabled),
 				ProbeTotal: 8, ProbeOK: 7, LatencyMS: 220,
 			},
 			want: false,
@@ -69,7 +70,7 @@ func TestChannelIsHealthy(t *testing.T) {
 		{
 			name: "延迟为0=不健康",
 			item: channelHealthItemDTO{
-				Status:    int(model.ChannelStatusEnabled),
+				Status:     int(model.ChannelStatusEnabled),
 				ProbeTotal: 8, ProbeOK: 8, LatencyMS: 0,
 			},
 			want: false,
@@ -78,7 +79,7 @@ func TestChannelIsHealthy(t *testing.T) {
 		{
 			name: "手动停用=不健康（且不标「变坏」）",
 			item: channelHealthItemDTO{
-				Status:    int(model.ChannelStatusDisabled),
+				Status:     int(model.ChannelStatusDisabled),
 				ProbeTotal: 8, ProbeOK: 8, LatencyMS: 220,
 			},
 			want: false,
@@ -87,7 +88,7 @@ func TestChannelIsHealthy(t *testing.T) {
 		{
 			name: "自动停用=不健康",
 			item: channelHealthItemDTO{
-				Status:    int(model.ChannelStatusAutoDisabled),
+				Status:     int(model.ChannelStatusAutoDisabled),
 				ProbeTotal: 0, LatencyMS: 0,
 			},
 			want: false,

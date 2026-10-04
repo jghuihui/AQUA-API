@@ -169,6 +169,17 @@ const (
 	CapMusic
 	// CapAsyncTask 走异步任务（提交-轮询-取产物）。
 	CapAsyncTask
+	// CapPromptCache 上游原生支持提示词缓存（prompt caching）。
+	//
+	// 【为什么单独设一个能力位，而不是"看协议就知道"】
+	//	同一个 OpenAI 兼容协议下，DeepSeek / 通义 / OpenAI 官方的缓存语义
+	//	完全不同：DeepSeek 命中不需要客户端做任何标记（自动缓存），
+	//	Anthropic 必须显式带 cache_control 断点，OpenAI 则是自动的。
+	//	按协议判断会得出"OpenAI 协议全都一样"的错误结论，
+	//	于是给不支持的上游也发标记 —— 上游要么忽略（无害）、
+	//	要么报错（整个请求失败）。
+	//	因此它是"具体类型"的属性，不是"协议"的属性。
+	CapPromptCache
 )
 
 // CapabilityNames 返回能力位对应的中文名列表（后台展示用）。
@@ -181,6 +192,7 @@ func CapabilityNames(caps Capability) []string {
 		{CapVision, "图像理解"}, {CapReasoning, "推理"}, {CapEmbedding, "嵌入"},
 		{CapRerank, "重排"}, {CapImage, "图像生成"}, {CapVideo, "视频生成"},
 		{CapAudio, "音频"}, {CapMusic, "音乐"}, {CapAsyncTask, "异步任务"},
+		{CapPromptCache, "提示词缓存"},
 	}
 	names := make([]string, 0, len(pairs))
 	for _, pair := range pairs {

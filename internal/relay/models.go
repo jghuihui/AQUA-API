@@ -93,7 +93,7 @@ func (r *Relay) FetchModels(ctx context.Context, baseURL, apiKey string) ([]stri
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
-	resp, err := r.client.Do(req)
+	resp, err := r.httpClient().Do(req)
 	if err != nil {
 		// 不回传底层错误细节，避免把内部地址与网络拓扑暴露到管理界面之外
 		return nil, fmt.Errorf("relay: 连接上游失败（请检查地址与网络）: %w", err)

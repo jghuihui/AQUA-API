@@ -158,7 +158,7 @@ func (r *Relay) QueryCodexQuota(ctx context.Context, channel *model.Channel, key
 	req.Header.Set(chatgptAccountIDHeader, accountID)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := r.client.Do(req)
+	resp, err := r.httpClient().Do(req)
 	if err != nil {
 		// 不回传底层错误：它可能包含内网地址或代理凭据
 		return nil, fmt.Errorf("relay: 连接额度端点失败（请检查网络与账号状态）")

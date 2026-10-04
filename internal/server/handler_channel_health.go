@@ -27,6 +27,7 @@
 //	前端 ChannelsHealthBoard 渲染表格与 ECharts 折线
 //
 // 扩展（Extend）：
+//
 //	要按小时降采样：给 List 加区间聚合参数（见 channel_probe_log_repo.go 的 Extend）；
 //	要跨渠道对比曲线：把明细接口的 channel_id 允许为 0（全站）即可，无需改结构。
 package server
@@ -130,7 +131,7 @@ type channelHealthSummaryDTO struct {
 // channelHealthResponse 是 GET /admin/channels/health 的响应体。
 type channelHealthResponse struct {
 	Summary channelHealthSummaryDTO `json:"summary"`
-	Items   []channelHealthItemDTO   `json:"items"`
+	Items   []channelHealthItemDTO  `json:"items"`
 	// WindowStart/WindowEnd 供前端在图上标注"统计区间"，
 	// 避免用户把"这段时间的成功率"误解为"全时段成功率"。
 	WindowStart int64 `json:"window_start"`
@@ -288,13 +289,13 @@ type channelProbeTimelineDTO struct {
 // 平均 300ms 可能意味着"多数 200ms + 偶发 5s 尖峰"，而后者在体感上就是"有时候很卡"。
 // 只有一个平均值时，这种卡顿在图表上完全看不出来。
 type probeLatencyStatsDTO struct {
-	Count int   `json:"count"`
-	Min   int   `json:"min"`
-	Max   int   `json:"max"`
-	Avg   int   `json:"avg"`
-	P50   int   `json:"p50"`
-	P95   int   `json:"p95"`
-	Valid bool  `json:"valid"`
+	Count int  `json:"count"`
+	Min   int  `json:"min"`
+	Max   int  `json:"max"`
+	Avg   int  `json:"avg"`
+	P50   int  `json:"p50"`
+	P95   int  `json:"p95"`
+	Valid bool `json:"valid"`
 }
 
 // handleChannelProbeTimeline 返回单个渠道的探针历史时间线。
@@ -529,7 +530,7 @@ func percentileOfSorted(sorted []int, p float64) int {
 		return sorted[len(sorted)-1]
 	}
 	// idx 用浮点算再取整，等价于 ceil(p*n) - 1，且 p=1 时正好落在末位。
-	idx := int(float64(len(sorted))*p + 0.9999999) - 1
+	idx := int(float64(len(sorted))*p+0.9999999) - 1
 	if idx < 0 {
 		idx = 0
 	}

@@ -85,7 +85,15 @@ const taskErrorMaxBytes = 500
 // 作为"通用兜底"注册在内置适配器之后——只有当没有更专用的适配器时，
 // 才会被自动选中（站长通常通过显式指定 provider=custom_async 来使用它）。
 type customAsyncProvider struct {
-	client *http.Client
+	// client 是取 HTTP 客户端的函数而不是 client 本身。
+	//
+	// 原因：加速器可以热替换客户端（改连接池参数需换 Transport），
+	// 而 provider 是在服务启动时构造的。若这里存 client 指针，
+	// 站长改完加速设置后异步任务仍会用旧连接池 —— 表现为"改了没反应"。
+	// 取函数则每次都能拿到当前的客户端。
+	//
+	// 为 nil 时由 httpClientFn 兜底成 http.DefaultClient。
+	client httpClientFn
 }
 
 // Name 返回适配器名。
@@ -135,7 +143,7 @@ func (p *customAsyncProvider) Submit(ctx context.Context, req *TaskRequest, ch *
 		return nil, err
 	}
 
-	resp, err := p.client.Do(upReq)
+	resp, err := p.client().Do(upReq)
 	if err != nil {
 		return nil, fmt.Errorf("请求上游失败: %w", err)
 	}
@@ -182,7 +190,7 @@ func (p *customAsyncProvider) Poll(ctx context.Context, task *model.Task, ch *mo
 		return nil, err
 	}
 
-	resp, err := p.client.Do(upReq)
+	resp, err := p.client().Do(upReq)
 	if err != nil {
 		return nil, fmt.Errorf("查询上游任务失败: %w", err)
 	}

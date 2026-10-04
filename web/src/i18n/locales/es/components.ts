@@ -261,6 +261,7 @@ export default {
       maintenanceMonitor: 'Mantenimiento y copias',
       settings: 'Ajustes',
       agent: 'Asistente de IA',
+      accelerator: 'Acelerador',
     },
     console: {
       console: 'Consola',
