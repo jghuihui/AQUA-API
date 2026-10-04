@@ -45,6 +45,20 @@ import (
 // 又短到"攻击者不可能指望一次不小心看到的密码能用一整天"。
 const ReauthWindow = 15 * time.Minute
 
+// ReauthWindowStrict 是【高危操作】的二次验证有效时长（见 requireFreshReauthStrict）。
+//
+// 取 2 分钟，不是"更短的 15 分钟"而是另一个量级：
+// 它的目标不是"防离开工位"（那是 ReauthWindow 的职责），
+// 而是"确保这一次提议与我上一次点头之间没有插入别的东西"。
+//
+// 2 分钟的取舍：
+//   - 够读完助手的提议、想清楚要不要做、按一次回车；
+//   - 不够"看完 → 去倒杯水 → 回来点确认"这种间隔，
+//     而那正是被诱导的高发时间窗；
+//   - 站长连续改多个用户额度会被打断多次，这是它的代价 ——
+//     但改额度属于碰钱的事，值得这个摩擦。
+const ReauthWindowStrict = 2 * time.Minute
+
 // reauthRequest 是二次验证的请求体。
 type reauthRequest struct {
 	Password string `json:"password"`
@@ -108,16 +122,49 @@ func (s *Server) handleReauth(c *gin.Context) {
 // 为什么默认【不放行】找不到会话的情况：宁可让管理员多输一次密码，
 // 也不能让"查不到会话"变成一条绕过二次验证的路径。
 func (s *Server) requireFreshReauth(c *gin.Context) bool {
+	return s.requireReauthWithin(c, ReauthWindow, "auth.reauth_required")
+}
+
+// requireFreshReauthStrict 是高危操作的版本：要求验证时刻更近。
+//
+// 【为什么需要比 ReauthWindow 更严的一道】
+//
+//	ReauthWindow 是 15 分钟，为的是让管理员能连续处理一批事务而不被打断。
+//	但 AI 助手的风险模型不一样：它的操作由【模型提议】，
+//	而模型可能因为一段被注入的内容去改额度、封用户、发公告。
+//	对这类操作，"15 分钟前我验过一次"是不够的证据 ——
+//	问题不在于人有没有离开，而在于那一刻的意图仍然成立吗。
+//
+//	因此高危操作要求"最近 2 分钟内刚验过"。
+//	代价是站长在连续改多个用户额度时会被打断几次；
+//	换来的是"上一句 innocuous 的问答"不能顺带授权一次删除。
+//
+//	为什么不用 UAC 式的独立令牌机制：项目已有一套成熟的二次验证
+//	（同一密码弹窗、同一 ReauthAt、7 个使用点），
+//	再造第二套会让管理员要记两种习惯与两个窗口时长。
+//	在这里加严窗口是唯一不产生第二套认知的做法。
+func (s *Server) requireFreshReauthStrict(c *gin.Context) bool {
+	return s.requireReauthWithin(c, ReauthWindowStrict, "auth.reauth_required")
+}
+
+// requireReauthWithin 是两档窗口的共同实现。
+//
+// 参数化而不是两个几乎一样的函数：两份实现迟早会在"错误码"或
+// "取不到会话时的处理"上分叉，而这类分叉表现为某些操作能绕过、某些不能，
+// 极难通过测试发现。
+func (s *Server) requireReauthWithin(c *gin.Context, window time.Duration, errCode string) bool {
 	session, ok := middleware.CurrentSession(c)
 	if !ok {
 		slog.Warn("敏感操作被拦下：上下文中没有会话信息", "path", c.Request.URL.Path)
-		writeUserError(c, http.StatusForbidden,
-			"auth.reauth_required", oai.TypePermission, "reauth_required")
+		writeUserError(c, http.StatusForbidden, errCode, oai.TypePermission, "reauth_required")
 		return false
 	}
-	if !session.IsReauthFresh(time.Now(), ReauthWindow) {
-		writeUserError(c, http.StatusForbidden,
-			"auth.reauth_required", oai.TypePermission, "reauth_required")
+	if !session.IsReauthFresh(time.Now(), window) {
+		// 记一下窗口长度：排障时"为什么这次又要输密码"最常见的原因是
+		// 站长没意识到高危操作的标准更高，而这行日志能直接给出答案。
+		slog.Info("二次验证窗口不足，需重新输入密码",
+			"path", c.Request.URL.Path, "window", window.String())
+		writeUserError(c, http.StatusForbidden, errCode, oai.TypePermission, "reauth_required")
 		return false
 	}
 	return true

@@ -519,7 +519,7 @@ func toolMyRecentUsage(t *AgentTools) Tool {
 
 // toolPublicAnnouncements 读站点公告与常见问题。
 //
-// 这是"读背景知识"的那部分：用��不必在公告发布时额外维护一份 FAQ，
+// 这是"读背景知识"的那部分：用户不必在公告发布时额外维护一份 FAQ，
 // 客服直接读真实公告 —— 于是公告一更新，客服的回答自动跟着更新。
 // 避免"客服说 A、公告写 B"这种口径分裂。
 func toolPublicAnnouncements(t *AgentTools) Tool {

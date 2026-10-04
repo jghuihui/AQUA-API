@@ -62,6 +62,11 @@ func newAgentEndpointTestServer(t *testing.T) (*Server, model.AgentEndpointRepos
 		Sessions:      store.NewSessionRepository(st.DB()),
 		Settings:      store.NewSettingRepository(st.DB(), st.Dialect()),
 		AgentEndpoint: endpoints,
+		// AgentKeys 也要接上：不接的话 /admin/agent/keys 直接返回 503
+		// "功能未启用"，而那是"服务器没装配"而不是"业务拒绝"。
+		// 闸门类测试（handler_agent_reauth_gate_test.go）要靠它才能验到
+		// "密钥不该在未验证时落库"这件事——503 会让那条断言变成假通过。
+		AgentKeys: store.NewAgentKeyRepository(st.DB()),
 	})
 	return srv, endpoints
 }
@@ -71,6 +76,13 @@ func newAgentEndpointTestServer(t *testing.T) (*Server, model.AgentEndpointRepos
 // 为什么必须建真实用户：SessionAuth 会载入用户并校验状态，
 // 会话上的 user_id 指向不存在的行会得到"账号不存在"，
 // 那样请求根本到不了 /admin 处理器，测试会因"接口没生效"而误判。
+//
+// 【为什么直接写入 ReauthAt 而不是先测一次 403】
+// 这一组测试要验的是"密钥不回显 / 配了一半退回渠道"，
+// 与鉴权无关。若让它们顺带被 reauth 闸门拦下，每个用例都要写一段
+// "先吃一个 403、再调 reauth、再重试"的样板，而闸门本身
+// 由 TestAgentAdmin写操作_未二次验证时一律拒绝 单独守着。
+// 直接把会话标成"刚验证过"，等于声明"本组测试假定鉴权已通过"。
 func newAgentEndpointAdmin(t *testing.T, srv *Server) string {
 	t.Helper()
 	ctx := context.Background()
@@ -87,6 +99,7 @@ func newAgentEndpointAdmin(t *testing.T, srv *Server) string {
 		UserID:    user.ID,
 		TokenHash: crypto.SHA256Hex(token),
 		ExpiresAt: time.Now().Add(time.Hour),
+		ReauthAt:  time.Now(),
 	}); err != nil {
 		t.Fatalf("创建测试会话失败: %v", err)
 	}

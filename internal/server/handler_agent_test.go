@@ -29,6 +29,7 @@ import (
 	"github.com/LTZY-ACU/ltzy-api/internal/config"
 	"github.com/LTZY-ACU/ltzy-api/internal/crypto"
 	"github.com/LTZY-ACU/ltzy-api/internal/model"
+	"github.com/LTZY-ACU/ltzy-api/internal/server/middleware"
 	"github.com/LTZY-ACU/ltzy-api/internal/store"
 )
 
@@ -412,7 +413,7 @@ func TestAgentKeyResponse_时间为Unix秒(t *testing.T) {
 // 一把能读站内数据的公网密钥——这是最容易发生也最难发现的越权。
 func TestCreateAgentKey_角色必填(t *testing.T) {
 	srv, _ := newAgentTestServer(t)
-	c, _ := newAgentCtx()
+	c, _ := newAdminAgentCtx()
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/admin/agent/keys",
 		strings.NewReader(`{"name":"漏填角色"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -435,7 +436,7 @@ func TestCreateAgentKey_角色必填(t *testing.T) {
 // TestCreateAgentKey_未知角色被拒 验证白名单严格生效。
 func TestCreateAgentKey_未知角色被拒(t *testing.T) {
 	srv, _ := newAgentTestServer(t)
-	c, _ := newAgentCtx()
+	c, _ := newAdminAgentCtx()
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/admin/agent/keys",
 		strings.NewReader(`{"name":"越权尝试","role":"root"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -458,7 +459,7 @@ func TestUpdateAgentKey_只改备注不改状态(t *testing.T) {
 	}
 	id := list[0].ID
 
-	c, rec := newAgentCtx()
+	c, rec := newAdminAgentCtx()
 	c.Request = httptest.NewRequest(http.MethodPut,
 		"/api/admin/agent/keys/"+itoa(id), strings.NewReader(`{"name":"新备注"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -491,7 +492,7 @@ func TestUpdateAgentKey_空提交被拒(t *testing.T) {
 	list, _ := keys.List(context.Background(), model.AgentKeyQuery{})
 	id := list[0].ID
 
-	c, _ := newAgentCtx()
+	c, _ := newAdminAgentCtx()
 	c.Request = httptest.NewRequest(http.MethodPut,
 		"/api/admin/agent/keys/"+itoa(id), strings.NewReader(`{}`))
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -522,7 +523,7 @@ func TestAgentSettings_局部更新不清空提示词(t *testing.T) {
 	}
 
 	// 只提交 enabled 一项（指针为 nil 的都不该被触碰）。
-	c, rec := newAgentCtx()
+	c, rec := newAdminAgentCtx()
 	c.Request = httptest.NewRequest(http.MethodPut,
 		"/api/admin/agent/settings", strings.NewReader(`{"enabled":true,"default_model":"新模型"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -549,7 +550,7 @@ func TestAgentSettings_局部更新不清空提示词(t *testing.T) {
 // TestAgentSettings_开启但没模型被拒 避免得到一个"开了但不能用"的入口。
 func TestAgentSettings_开启但没模型被拒(t *testing.T) {
 	srv, _ := newAgentTestServer(t)
-	c, _ := newAgentCtx()
+	c, _ := newAdminAgentCtx()
 	c.Request = httptest.NewRequest(http.MethodPut,
 		"/api/admin/agent/settings", strings.NewReader(`{"enabled":true}`))
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -949,5 +950,26 @@ func itoa(v uint64) string { return strconv.FormatUint(v, 10) }
 func newAgentCtx() (*gin.Context, *httptest.ResponseRecorder) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
+	return c, rec
+}
+
+// newAdminAgentCtx 造一个"刚通过二次验证的后台管理员"上下文。
+//
+// 【为什么需要它】
+// 这几组测试直接调 handler（绕过路由与中间件），所以必须自己把会话塞进上下文。
+// 少了这一步，requireFreshReauthStrict 会按"找不到会话"处理并返回 403 ——
+// 于是"漏填角色应 400"这类断言看到 403 就失败了，
+// 而失败原因（没塞会话）与它们要验的东西（参数校验、局部更新语义）毫无关系。
+//
+// ReauthAt 取当前时刻：本组测试【假定鉴权已通过】。
+// 闸门本身由 handler_agent_reauth_gate_test.go 单独守着，
+// 两边各管一件事，不互相污染。
+func newAdminAgentCtx() (*gin.Context, *httptest.ResponseRecorder) {
+	c, rec := newAgentCtx()
+	middleware.SetSession(c, &model.Session{
+		ID:        1,
+		ExpiresAt: time.Now().Add(time.Hour),
+		ReauthAt:  time.Now(),
+	})
 	return c, rec
 }

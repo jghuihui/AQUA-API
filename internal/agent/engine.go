@@ -89,7 +89,28 @@ type AskRequest struct {
 	// 何时写响应头、失败时怎么降级，这些都不该由引擎决定。
 	OnDelta func(text string)
 	// OnToolCall 在执行每个工具前调用（用于向前端展示"正在查什么"）。
+	//
+	// 【它不能阻止执行】—— 这是一个"通知"而非"闸门"。
+	// 需要阻止执行的地方（确认、提权）各有自己的回调与判定，
+	// 混在一个回调里用返回值/panic 控制会得到一个隐式的双重职责。
 	OnToolCall func(name string, mutating bool)
+
+	// OnElevationRequired 在即将执行高危工具、但缺少有效提权时调用。
+	// 返回 true 表示"已处理，本轮到此为止"。
+	//
+	// 【为什么需要它，而不是让 server 层在 OnToolCall 里想办法】
+	//
+	//	高危工具的判定发生在【模型决定调用哪个工具的那一刻】，
+	//	而那时提权令牌可能已经过期 —— 对话开始时的校验只覆盖了"对话开始时"。
+	//	引擎必须在这里给 server 层一个中止本轮的正规出口，
+	//	就像 resolveConfirmation 对确认做的那样。
+	//
+	//	用 panic 中止是不可接受的：那会一路冒泡到 HTTP 中间件，
+	//	把一次正常的"请输密码"变成 500，还可能触发平台的异常告警。
+	//
+	//	返回 true 的语义与 resolveConfirmation 的 blocked 一致：
+	//	"我已经发出了需要人工介入的事件，本轮不要再往下走"。
+	OnElevationRequired func(toolName string) bool
 
 	// Confirmed 是本次对话已获站长确认的写操作。
 	//
@@ -401,6 +422,27 @@ func (e *Engine) executeOne(
 		return rec
 	}
 	rec.Mutating = tool.Mutating
+
+	// 【高危工具的提权检查必须在发 tool 事件【之前】】
+	//
+	// 顺序理由：tool 事件的语义是"正在执行"，前端据此显示
+	// "正在改用户额度"。若先发事件再发现要弹密码框，
+	// 站长会看到"它已经在改了"然后被问密码 —— 那是欺骗性的界面。
+	// 正确做法是这一轮干脆不发 tool 事件，只发 elevation_required。
+	//
+	// 为什么在这里查而不在对话开始时查完：对话开始时还不知道模型
+	// 会调哪个工具，而这个判定是模型在那一刻决定的。
+	if IsHighRiskTool(tool.Name) && ask != nil && ask.OnElevationRequired != nil {
+		if ask.OnElevationRequired(tool.Name) {
+			// 已发出提权事件，等站长输密码。本轮到此为止：
+			// 引擎手里没有工具结果可回填，继续循环只会让模型反复重试。
+			rec.OK = false
+			rec.Error = "等待管理员验证"
+			rec.Result = toolErrorResult("该操作需要管理员重新输入密码，确认后才会执行")
+			return rec
+		}
+	}
+
 	if ask != nil && ask.OnToolCall != nil {
 		ask.OnToolCall(tool.Name, tool.Mutating)
 	}

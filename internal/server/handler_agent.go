@@ -172,6 +172,25 @@ type sseEvent struct {
 	Result *agentAskResultDTO `json:"result,omitempty"`
 	// Message 仅 error 事件使用（面向人的可读原因）。
 	Message string `json:"message,omitempty"`
+	// Elevation 仅 elevation_required 事件使用。
+	//
+	// 独立于 confirm：两者是【不同性质的暂停】——
+	//   confirm 问"这次操作你批准吗"（针对具体工具与参数）；
+	//   elevation 问"你刚验过密码吗"（针对身份新鲜度，与哪个工具无关）。
+	// 前端必须分开处理：前者弹"确认/取消"，后者弹"输入密码"。
+	// 混成一个弹窗会让站长以为"点一下确认就够了"，从而绕过身份验证。
+	Elevation *sseElevationEvent `json:"elevation,omitempty"`
+}
+
+// sseElevationEvent 是"需要重新输入管理员密码"的事件负载。
+type sseElevationEvent struct {
+	// Reason 取值：missing（从未验证或已超过普通窗口）/ high_risk（高危操作要求更新鲜的验证）。
+	// 前端据此显示不同文案：每次都弹同一句"请输入密码"会让人以为系统坏了。
+	Reason string `json:"reason"`
+	// Message 是给用户看的一句话。
+	Message string `json:"message"`
+	// HighRiskTool 是触发严格验证的工具名，仅 high_risk 时非空。
+	HighRiskTool string `json:"high_risk_tool,omitempty"`
 }
 
 // sseToolEvent 是"正在执行某个工具"的事件负载。
@@ -347,6 +366,43 @@ func (s *Server) handleAgentChat(role model.AgentRole) gin.HandlerFunc {
 			askReq.Question = confirmedFollowUpHint(req.Confirm.ToolName) + "\n" + question
 		}
 
+		/*
+		 * 【对话开始时的普通二次验证】
+		 *
+		 * 运维助手有 22 个工具，其中 6 个是高危（改额度、封用户、发公告…）。
+		 * 判定放在【对话开始】而不是"每个工具之前"：
+		 * 每问一句都输一次密码会训练出"手快回车"，那比不做更危险。
+		 * 与既有 reauth 机制一致——一次验证覆盖 ReauthWindow(15 分钟)内的
+		 * 一批操作。
+		 *
+		 * 但【具体某个工具是否高危】要到模型决定调用时才知道，
+		 * 那时由 streamAgentAnswer 里挂的 OnElevationRequired 回调用
+		 * 更严的 ReauthWindowStrict(2 分钟) 复查。
+		 * 两处缺一不可：只查这里则高危操作与只读操作同样宽松；
+		 * 只查那里则连"查一下渠道列表"都要输密码。
+		 *
+		 * 不提权时在这里就发事件而不是等到执行时 ——
+		 * 让用户一进来就知道需要验证，而不是先读完一段助手回答再被拦。
+		 */
+		if err := s.checkAgentReauth(c, role); err != nil {
+			flusher, canFlush := c.Writer.(http.Flusher)
+			if canFlush {
+				// SSE 一旦写出第一个字节就锁死状态码，
+				// 所以必须在此处（streamAgentAnswer 写头之前）发出。
+				w := newSSEWriter(c.Writer, flusher)
+				w.writeHeaders()
+				w.send(sseEvent{Type: "elevation_required", Elevation: &sseElevationEvent{
+					Reason:  "missing",
+					Message: "助手需要验证管理员身份才能操作站点数据，请输入管理员密码",
+				}})
+				w.close()
+				return
+			}
+			oai.WriteError(c.Writer, http.StatusForbidden,
+				"需要验证管理员身份", oai.TypePermission, "reauth_required")
+			return
+		}
+
 		s.streamAgentAnswer(c, engine, askReq, settings, role)
 	}
 }
@@ -403,6 +459,40 @@ func (s *Server) streamAgentAnswer(
 		writer.send(sseEvent{Type: "tool", Tool: &sseToolEvent{Name: name, Mutating: mutating}})
 	}
 
+	// 高危工具的二次验证闸门。
+	//
+	// 引擎在【模型决定调用哪个工具的那一刻】调它，因此这里才知道该不该拦 ——
+	// 对话开始时只能知道"是否已验证过"，而具体调哪个工具是模型决定的。
+	//
+	// 与 OnConfirmRequired 的分工：那个问"这次操作你批准吗"，
+	// 这个问"你是不是刚验过密码"。两者不能互相替代 ——
+	// 合并就等于"点一次确认就能改额度"，那正是要防的事。
+	//
+	// 返回 true 表示"已发出验证请求，本轮中止"，引擎会停住主循环。
+	req.OnElevationRequired = func(toolName string) bool {
+		// 客服角色不该走到这里（它的工具里没有高危项），
+		// 但真走到也不弹窗：用户没有管理员密码可输，弹了就是死路。
+		if role != model.AgentRoleOps {
+			return false
+		}
+		session, ok := middleware.CurrentSession(c)
+		if !ok {
+			slog.Error("agent 高危校验：取不到会话，路由可能漏挂 SessionAuth",
+				"path", c.Request.URL.Path, "tool", toolName)
+			return false
+		}
+		if session.IsReauthFresh(time.Now(), ReauthWindowStrict) {
+			return false
+		}
+		writer.send(sseEvent{Type: "elevation_required", Elevation: &sseElevationEvent{
+			Reason: "high_risk",
+			Message: "「" + toolName + "」会影响用户权益或站点数据，" +
+				"请重新输入管理员密码以确认这次操作",
+			HighRiskTool: toolName,
+		}})
+		return true
+	}
+
 	// 确认请求：引擎发现某个写操作需要站长点头时回调这里。
 	//
 	// 【这里只发事件，不做授权判断】
@@ -455,6 +545,50 @@ func (s *Server) streamAgentAnswer(
 	writer.send(sseEvent{Type: "done", Result: buildAgentResultDTO(result, role, tools)})
 	writer.close()
 }
+
+// checkAgentReauth 判断本次对话是否需要管理员重新输入密码。
+//
+// 【为什么复用既有的 reauth，而不是做一套 UAC 式独立令牌】
+//
+//	最初实现了一套独立提权令牌（内存态、5 分钟、绑定会话、专属弹窗）。
+//	做完才发现项目里早已有一套成熟机制：POST /api/auth/reauth、
+//	session.ReauthAt 落库、ReauthWindow 15 分钟、useReauthGuard 弹窗，
+//	以及 7 个使用点（群发 / 发放试用额 / 人工入账 / 告警通道…）。
+//
+//	再造一套的代价不是多几十行代码，而是管理员要记两套习惯、
+//	面对两个不同长度的窗口、经历两次不同样式的弹窗。
+//	对同一件事存在两种做法时，使用方会挑最弱的那个 ——
+//	于是"两套并存"实际上降低了整体安全性。
+//
+//	真正新增、且值得保留的只有一点：【按风险分档的窗口长度】。
+//	普通操作 15 分钟（沿用 ReauthWindow），高危操作 2 分钟
+//	（ReauthWindowStrict），见 reauth.go 的说明。
+//
+// 客服角色一律不拦：它的工具里没有高危项，且用户没有管理员密码可输。
+// 它的安全边界靠"工具只能操作自己的数据"（见 agent/tools_selfservice.go）。
+func (s *Server) checkAgentReauth(c *gin.Context, role model.AgentRole) error {
+	if role != model.AgentRoleOps {
+		return nil
+	}
+	session, ok := middleware.CurrentSession(c)
+	if !ok {
+		// 取不到会话说明路由装配漏挂了 SessionAuth。
+		// 按"需要验证"处理（fail-closed）而不是放行。
+		slog.Error("agent 二次验证：取不到会话，路由可能漏挂 SessionAuth",
+			"path", c.Request.URL.Path)
+		return errAgentReauthRequired
+	}
+	if session.IsReauthFresh(time.Now(), ReauthWindow) {
+		return nil
+	}
+	return errAgentReauthRequired
+}
+
+// errAgentReauthRequired 是"需要二次验证"的内部信号。
+//
+// 用哨兵错误而非布尔字段：布尔字段容易在某条分支上被漏看，
+// 而哨兵值必须被显式返回，漏了就编译不过或走错分支。
+var errAgentReauthRequired = errors.New("agent: 需要二次验证")
 
 // resolveAgentModel 决定本次调用用哪个模型。
 //

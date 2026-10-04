@@ -322,6 +322,13 @@ export default function AdminAgentPage() {
         <SettingsForm
           settings={settings}
           endpoint={endpoint}
+          /*
+           * guard 从父组件传下来而不是子组件各自 useReauthGuard()：
+           * 两个 hook 实例 = 两个密码弹窗挂载在同一页，站长会看到
+           * 同一页有两套一模一样的弹窗，而实际只有一处会被点亮。
+           * 弹窗本体（dialog）也只渲染一次，见本页末尾。
+           */
+          guard={guard}
           onEndpointSaved={(next) => {
             setEndpoint(next)
             // 重新拉一次：保存独立上游可能顺带改动了总开关
@@ -448,6 +455,7 @@ function SettingsForm({
   onSaved,
   endpoint,
   onEndpointSaved,
+  guard,
 }: {
   settings: AgentSettings
   onSaved: (next: AgentSettings) => void
@@ -457,6 +465,8 @@ function SettingsForm({
    */
   endpoint: AgentEndpoint | null
   onEndpointSaved: (next: AgentEndpoint) => void
+  /** 父组件的 useReauthGuard().guard，理由见调用处注释 */
+  guard: <T>(fn: () => Promise<T>) => Promise<T>
 }) {
   const { toast, toastError } = useToast()
   const [defaultModel, setDefaultModel] = useState(settings.default_model)
@@ -480,14 +490,18 @@ function SettingsForm({
   async function handleSave() {
     setSaving(true)
     try {
-      const saved = await saveAgentSettings({
-        default_model: defaultModel.trim(),
-        ops_model: opsModel.trim(),
-        support_model: supportModel.trim(),
-        ops_system_prompt: opsPrompt,
-        support_system_prompt: supportPrompt,
-        history_enabled: historyEnabled,
-      })
+      // 服务端对 settings / endpoint 的写操作挂了 requireFreshReauthStrict，
+      // 未验证时返回 403 reauth_required，由 guard 弹密码框后自动重试。
+      const saved = await guard(() =>
+        saveAgentSettings({
+          default_model: defaultModel.trim(),
+          ops_model: opsModel.trim(),
+          support_model: supportModel.trim(),
+          ops_system_prompt: opsPrompt,
+          support_system_prompt: supportPrompt,
+          history_enabled: historyEnabled,
+        }),
+      )
       onSaved(saved)
       toast('配置已保存')
     } catch (err) {
@@ -507,9 +521,9 @@ function SettingsForm({
    *    而用户完全不知道自己漏了哪一步。把表单一起提交，开关与内容
    *    天然一致，也不会出现"界面显示已开、实际模型还是上一份"的错位状态。
    *
-   * 2) 不复用顶部横幅的 persistEnabled：那个函数带二次验证且失败时已报过错，
-   *    在这里再包一层 catch 只会让同一次失败弹两条一样的提示。
-   *    配置页自己发请求，由本函数独占错误处理。
+   * 2) 不复用顶部横幅的 persistEnabled：那个函数已包过 guard，
+   *    在这里再包一层会让同一次失败弹两条一样的提示，
+   *    而且两次密码弹窗会叠在一起。配置页自己发请求、由本函数独占错误处理。
    */
   async function handleToggleFromForm(next: boolean) {
     // 开启时先校验本地表单：空着就别去让后端拒绝，那只会得到一句技术文案。
@@ -521,15 +535,17 @@ function SettingsForm({
     try {
       // 注意 enabled 一并带上：这不是"保存表单 + 另切开关"两个请求，
       // 而是一次提交，避免中间态被别人读到。
-      const saved = await saveAgentSettings({
-        enabled: next,
-        default_model: defaultModel.trim(),
-        ops_model: opsModel.trim(),
-        support_model: supportModel.trim(),
-        ops_system_prompt: opsPrompt,
-        support_system_prompt: supportPrompt,
-        history_enabled: historyEnabled,
-      })
+      const saved = await guard(() =>
+        saveAgentSettings({
+          enabled: next,
+          default_model: defaultModel.trim(),
+          ops_model: opsModel.trim(),
+          support_model: supportModel.trim(),
+          ops_system_prompt: opsPrompt,
+          support_system_prompt: supportPrompt,
+          history_enabled: historyEnabled,
+        }),
+      )
       onSaved(saved)
       toast(next ? '助手已启用' : '助手已停用，两个入口同时关闭')
     } catch (err) {
@@ -665,7 +681,7 @@ function SettingsForm({
         放在模型选择之前会让人以为必须先配它才能用助手——
         而实际上默认（未启用）就是借渠道，那才是多数站长的处境。
       */}
-      <EndpointForm endpoint={endpoint} onSaved={onEndpointSaved} />
+      <EndpointForm endpoint={endpoint} onSaved={onEndpointSaved} guard={guard} />
     </div>
   )
 }
@@ -694,9 +710,12 @@ function SettingsForm({
 function EndpointForm({
   endpoint,
   onSaved,
+  guard,
 }: {
   endpoint: AgentEndpoint | null
   onSaved: (next: AgentEndpoint) => void
+  /** 父组件的 useReauthGuard().guard，理由见调用处注释 */
+  guard: <T>(fn: () => Promise<T>) => Promise<T>
 }) {
   const { toast, toastError } = useToast()
   const [saving, setSaving] = useState(false)
@@ -736,16 +755,19 @@ function EndpointForm({
   async function handleSave(nextEnabled = enabled) {
     setSaving(true)
     try {
-      const saved = await saveAgentEndpoint({
-        base_url: baseURL.trim(),
-        // 留空就不传这个字段：服务端据此沿用旧密钥。
-        // 传空串与不传在这里是同一件事，但语义上"不传"更准确地表达
-        // "我没打算改它"，且不依赖服务端的空串约定。
-        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-        model: model.trim(),
-        kind,
-        enabled: nextEnabled,
-      })
+      // 改 base_url = 改所有对话往哪发，服务端按高危处理（2 分钟窗口）。
+      const saved = await guard(() =>
+        saveAgentEndpoint({
+          base_url: baseURL.trim(),
+          // 留空就不传这个字段：服务端据此沿用旧密钥。
+          // 传空串与不传在这里是同一件事，但语义上"不传"更准确地表达
+          // "我没打算改它"，且不依赖服务端的空串约定。
+          ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+          model: model.trim(),
+          kind,
+          enabled: nextEnabled,
+        }),
+      )
       setBaseURL(saved.base_url)
       setModel(saved.model)
       setKind(saved.kind)

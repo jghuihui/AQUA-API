@@ -241,6 +241,28 @@ type Server struct {
 	// 但它仍然必须有上限——每次轮询都会向对方平台发一次真实出站请求。
 	qiuPollLimiter *middleware.RateLimiter
 
+	// agentKeyLimiter / agentIPLimiter / agentSiteLimiter 三条限流器
+	// 保护 agent 的公网入口（见 middleware/agent_ratelimit.go 的设计说明）。
+	//
+	// 三条缺一不可：前两条防"单把 key 滥用"与"单 IP 换 key 滥用"，
+	// 而攻击者同时控制着 key 的发放与来源 IP，真正兜底的是第三条 ——
+	// 它给出的是整个站点的总支出上界。
+	agentKeyLimiter  *middleware.RateLimiter
+	agentIPLimiter   *middleware.RateLimiter
+	agentSiteLimiter *middleware.RateLimiter
+	// agentUserLimiter 单独一条给门户客服：它按用户 ID 计数，
+	// 粒度比 key 细（一个 key 可能被多人共用，一个账号通常是一个人）。
+	agentUserLimiter *middleware.RateLimiter
+
+	// elevationLimiter 限制提权校验的频率。
+	//
+	// 为什么不复用 loginLimiter：这里的口令校验同样是 bcrypt（刻意昂贵），
+	// 但它的可用额度必须【远小于】登录 —— 登录错了顶多重试几次，
+	// 提权是为了执行高危操作，一个能无限试错的提权接口等于没有提权。
+	// 25 次/5 分钟足够站长连续授权若干次，也足够慢到爆破不划算。
+	elevationLimiter *middleware.RateLimiter
+
+
 	// sensitiveFilter 是 /v1 入口的内容合规过滤器（敏感词）。
 	//
 	// 与登录限流器一样属于"进程内状态"：它缓存编译好的词表匹配器；
@@ -328,6 +350,26 @@ func New(deps Deps) *Server {
 		// 正常用户几乎感知不到：连续输错 10 次的人本来就该歇 5 分钟。
 		loginAccountLimiter: middleware.NewRateLimiter(10, 5*time.Minute),
 		qiuPollLimiter:      middleware.NewRateLimiter(qiuPollLimit, 5*time.Minute),
+
+		// agent 公网入口的三条限流器，阈值按"正常用户根本达不到、
+		// 攻击者跑不划算"来定。
+		//
+		// agentKeyLimiter 30 次/5 分钟：正常对话者一分钟能问好几个问题，
+		// 留出充足余量；30 次/5 分钟已足够把"拿一把 key 狂刷"变成亏本买卖。
+		agentKeyLimiter: middleware.NewRateLimiter(30, 5*time.Minute),
+		// agentIPLimiter 60 次/5 分钟：比按 key 宽一倍，因为同一个 IP
+		// 后台可能有多个互不相识的人共用（公司出口、校园网）。
+		agentIPLimiter: middleware.NewRateLimiter(60, 5*time.Minute),
+		// agentSiteLimiter 500 次/5 分钟：真正的兜底。
+		// 前两条都基于"某一把 key"或"某一个 IP"，而攻击者两样都能换；
+		// 只有站点总量能给出一个与调用方无关的硬上界。
+		agentSiteLimiter: middleware.NewRateLimiter(500, 5*time.Minute),
+		// agentUserLimiter 40 次/5 分钟：门户用户比持 key 的外部人更宽松，
+		// 因为自助客服能真正解决问题（查订单、建 key），需要多轮对话才划得来。
+		agentUserLimiter: middleware.NewRateLimiter(40, 5*time.Minute),
+		// elevationLimiter 25 次/5 分钟：刻意比 loginLimiter(20) 宽一点，
+		// 因为管理员一次连贯操作可能要授权多次；但绝不能宽到能爆破。
+		elevationLimiter: middleware.NewRateLimiter(25, 5*time.Minute),
 		// 内容合规过滤器：词表编译结果在组件内缓存，改词后由后台主动失效。
 		sensitiveFilter: middleware.NewSensitiveFilter(deps.SensitiveWords, deps.Settings),
 		metrics:         reg,

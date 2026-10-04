@@ -258,6 +258,16 @@ func (s *Server) registerRoutes() {
 	// AgentKeyAuth 为 nil 仓储时一律 503（fail-closed），见中间件说明。
 	agentPublic := api.Group("/agent")
 	agentPublic.Use(middleware.AgentKeyAuth(s.deps.AgentKeys))
+	// 三条限流器，缺一不可（设计理由见 middleware/agent_ratelimit.go 文件头）：
+	//   按 key —— 换 IP 无用；按 IP —— 换 key 无用；按站点 —— 两者都能换时的兜底。
+	// 顺序上刻意让 AgentKeyAuth 在最前：拿不到 key 的请求本就不该被计数，
+	// 让它先撞上鉴权，得到的才是 401 而不是一条"限流"记录。
+	agentPublic.Use(middleware.AgentRateLimit(
+		s.agentKeyLimiter, middleware.AgentKeyLimit, middleware.LimitScopeKey))
+	agentPublic.Use(middleware.AgentRateLimit(
+		s.agentIPLimiter, middleware.AgentIPLimit, middleware.LimitScopeIP))
+	agentPublic.Use(middleware.AgentRateLimit(
+		s.agentSiteLimiter, middleware.AgentSiteLimit, middleware.LimitScopeSite))
 	// 启用开关的判定放在处理器里而非路由上：它需要读设置（一次 DB 往返），
 	// 而路由注册发生在启动时，那时读不到运行期可改的配置。
 	agentPublic.POST("/chat", s.handlePublicAgentChat)
@@ -265,13 +275,23 @@ func (s *Server) registerRoutes() {
 	// 门户在线客服：登录用户直接问客服，无需先去后台领一把 agent key。
 	//
 	// 挂在 portal（= authed 之下）即自动继承 SessionAuth：会话带的是普通
-	// 用户身份，而工具授权由 agent.ToolsForRole 决定，与鉴权方式无关，
-	// 因此这里拿到的能力与持 support 密钥的外部人完全相同（零工具）。
+	// 用户身份，而工具授权由 agent.ToolsForRole 决定，与鉴权方式无关。
+	// 它拿到的是 self_service 角色 —— 与持 support 密钥的外部人不同，
+	// 登录用户可以查自己的订单/余额/令牌（见 agent/tools_selfservice.go）。
 	//
 	// 不与 /agent 公开入口合并：后者在公网、用密钥、拒绝运维密钥；
 	// 前者要求登录、用会话。合成一条再按鉴权方式分支，
 	// 迟早会出现"某个分支忘了判角色"——那正是越权。
-	portal.POST("/agent/chat", s.handlePortalAgentChat)
+	//
+	// 限流同样必需：自助客服会调工具、工具会查库，而对话本身还要花钱。
+	// 门户这一侧按【用户 ID】计数而非按 key —— 注册用户比申请密钥容易得多，
+	// 不限流等于开放注册即可刷上游额度。
+	portal.POST("/agent/chat",
+		middleware.AgentRateLimit(
+			s.agentUserLimiter, middleware.AgentUserLimit, middleware.LimitScopeUser),
+		middleware.AgentRateLimit(
+			s.agentSiteLimiter, middleware.AgentSiteLimit, middleware.LimitScopeSite),
+		s.handlePortalAgentChat)
 
 	// ── 充值（用户自己的订单）────────────────────────────────────
 	portal.POST("/orders", s.handleCreateOrder)

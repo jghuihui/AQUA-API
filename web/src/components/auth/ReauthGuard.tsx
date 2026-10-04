@@ -11,12 +11,16 @@
  *     3) 密码只在弹窗内流转，不会经过调用方，减少它出现在日志里的机会。
  *
  * 流转（Flow）：
- *   guard(fn) → 403/reauth_required → askPassword()（弹窗）
+ *   guard(fn) → 403/reauth_required → confirm()（弹窗）
  *     → POST /api/auth/reauth → 重新执行 fn
+ *
+ *   confirm() 是给【服务端主动告知】的场景用的：SSE 流式接口不能靠 403 表达
+ *   "这一步需要验证"，只能推一个事件过来，此时没有 fn 可执行、也不该先执行。
+ *   guard 的形状在那种场景下会退化成"跑一遍 → 又被拦 → 再跑一遍"。
  *
  * 扩展（Extend）：
  *   将来接入"短信/邮箱验证码二次验证"时，只改弹窗内部与 reauth 的调用，
- *   guard 的形状与调用方代码都不用动。
+ *   guard / confirm 的形状与调用方代码都不用动。
  */
 'use client'
 
@@ -33,20 +37,22 @@ export function useReauthGuard() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   // 弹窗是异步的：用 ref 挂住 promise 的 resolve，等用户点确认或取消再落地。
-  const resolverRef = useRef<((value: string | null) => void) | null>(null)
+  // resolve 的是"验没验过"，不是密码本身：密码出了这个 hook 就等于多了一个
+  // 可能被日志、埋点、错误上报捕获的副本，而它在这里除了确认以外没有别的用途。
+  const resolverRef = useRef<((verified: boolean) => void) | null>(null)
 
-  const askPassword = useCallback((): Promise<string | null> => {
+  const confirm = useCallback((): Promise<boolean> => {
     setPassword('')
     setError('')
     setOpen(true)
-    return new Promise<string | null>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       resolverRef.current = resolve
     })
   }, [])
 
-  function closeWith(value: string | null) {
+  function closeWith(verified: boolean) {
     setOpen(false)
-    resolverRef.current?.(value)
+    resolverRef.current?.(verified)
     resolverRef.current = null
   }
 
@@ -58,7 +64,7 @@ export function useReauthGuard() {
     setSubmitting(true)
     try {
       await reauth(password)
-      closeWith(password)
+      closeWith(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : '验证失败')
     } finally {
@@ -80,26 +86,26 @@ export function useReauthGuard() {
         if (!(err instanceof ApiError) || err.status !== 403 || err.code !== 'reauth_required') {
           throw err
         }
-        const pw = await askPassword()
-        if (!pw) {
+        const verified = await confirm()
+        if (!verified) {
           throw new Error('已取消：该操作需要重新验证密码后才能继续')
         }
         // 验证已经成功（handleSubmit 里完成），直接重试原操作即可
         return await fn()
       }
     },
-    [askPassword],
+    [confirm],
   )
 
   const dialog = (
     <Modal
       open={open}
-      onClose={() => closeWith(null)}
+      onClose={() => closeWith(false)}
       title="需要重新验证密码"
       width={420}
       footer={
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="secondary" onClick={() => closeWith(null)}>
+          <Button type="button" variant="secondary" onClick={() => closeWith(false)}>
             取消
           </Button>
           <Button type="button" variant="primary" loading={submitting} onClick={handleSubmit}>
@@ -128,5 +134,5 @@ export function useReauthGuard() {
     </Modal>
   )
 
-  return { guard, dialog }
+  return { guard, confirm, dialog }
 }

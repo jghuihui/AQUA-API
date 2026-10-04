@@ -14,6 +14,19 @@
 //	一台被入侵的机器）就直接等于所有客服密钥同时失守，
 //	而站长对"我这把 key 还安全吗"将完全没有判断依据。
 //
+// 【写操作必须过一次二次验证，这不是可选项】
+//
+//	能改客服提示词 = 能改本站对外说话的嘴（可以把客服话术改成钓鱼链接）；
+//	能发客服密钥 = 能让外部人用站长的钱，且密钥离开本站后追不回。
+//	前端 useReauthGuard 的 guard() 只是【收到 403 后】才弹窗重试，
+//	服务端不返回 403 它就只是个透明包装 ——
+//	所以闸门必须落在这里，前端那份是体验不是防线。
+//
+//	窗口用 ReauthWindowStrict(2 分钟) 而非默认的 15 分钟：
+//	这批操作全部由【点击按钮】触发，不存在"连续处理一批"的效率诉求，
+//	而密钥一旦发出去就收不回来。用宽窗口等于"15 分钟前验过一次"，
+//	而那段时间里站长可能只是去倒了杯水。
+//
 // 流转（Flow）：
 //
 //	GET    /api/admin/agent/settings  → 读配置（含"是否用内置提示词"的标记）
@@ -108,6 +121,11 @@ func (s *Server) handleGetAgentSettings(c *gin.Context) {
 // 而提示词这类长文本一旦被某次"只改模型名"的提交顺手清空，
 // 站长精心写的客服话术就没了且无从恢复——这个默认值必须是保守的。
 func (s *Server) handleUpdateAgentSettings(c *gin.Context) {
+	// 改提示词 = 改本站对外说话的嘴，必须验密码（理由见文件头）。
+	if !s.requireFreshReauthStrict(c) {
+		return
+	}
+
 	var req agentSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		oai.WriteError(c.Writer, http.StatusBadRequest, "请求体格式错误",
@@ -281,6 +299,11 @@ func (s *Server) handleCreateAgentKey(c *gin.Context) {
 		return
 	}
 
+	// 发出去了就收不回来：明文只显示一次，之后谁都无法找回这把钥匙。
+	if !s.requireFreshReauthStrict(c) {
+		return
+	}
+
 	var req createAgentKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		oai.WriteError(c.Writer, http.StatusBadRequest, "请求体格式错误",
@@ -346,6 +369,11 @@ func (s *Server) handleUpdateAgentKey(c *gin.Context) {
 	if s.deps.AgentKeys == nil {
 		oai.WriteError(c.Writer, http.StatusServiceUnavailable, "agent 密钥功能未启用",
 			oai.TypeServer, "agent_not_enabled")
+		return
+	}
+
+	// 停用一把已经流出去的密钥是止损动作，等它输密码期间它还在被用。
+	if !s.requireFreshReauthStrict(c) {
 		return
 	}
 
@@ -437,6 +465,12 @@ func (s *Server) handleDeleteAgentKey(c *gin.Context) {
 			oai.TypeServer, "agent_not_enabled")
 		return
 	}
+
+	// 永久删除、立即失效。删错了没法恢复，所以也要验密码。
+	if !s.requireFreshReauthStrict(c) {
+		return
+	}
+
 	id, ok := parseAgentKeyID(c)
 	if !ok {
 		return

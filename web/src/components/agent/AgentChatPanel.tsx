@@ -38,7 +38,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/AppIcon'
 import { Button } from '@/components/ui/Button'
-import type { AgentChatTurn, AgentConfirmRequest, AgentToolCall } from '@/api/agent'
+import type {
+  AgentChatTurn,
+  AgentConfirmRequest,
+  AgentElevationRequest,
+  AgentToolCall,
+} from '@/api/agent'
+import { reauth } from '@/api/auth'
+import { useReauthGuard } from '@/components/auth/ReauthGuard'
 
 import { AgentConfirmDialog } from './AgentConfirmDialog'
 
@@ -78,12 +85,28 @@ export type AskFn = (
      * 请求体里只会诱导调用方"照着改一改再发"。
      */
     confirm?: { tool_name: string; params: Record<string, unknown> }
+    /**
+     * UAC 提权令牌。
+     *
+     * 与 confirm 是两种授权，不可互相替代：前者由站长的"点确认"产生，
+     * 后者由"输入密码"产生。合并会让一次点确认变成长期授权。
+     */
+    elevation_token?: string
   },
   handlers: {
     onDelta: (text: string) => void
     onTool: (name: string, mutating: boolean) => void
     /** 助手请求确认一个高危写操作；本组件据此弹窗，而不是当成失败 */
     onConfirm?: (confirm: AgentConfirmRequest) => void
+    /**
+     * 需要输入管理员密码才能继续。
+     *
+     * 【必须与 onConfirm 分开处理】
+     * 若都弹同一个"确认/取消"框，站长点一下确认就被当成身份验证通过 ——
+     * 而这正是这个功能要防的事。取消也不能替代密码：
+     * 不想继续就直接关掉，不需要一个"取消提权"的语义。
+     */
+    onElevationRequired?: (request: AgentElevationRequest) => void
     onDone: (result: { answer: string; tool_calls: AgentToolCall[]; prompt_tokens: number; completion_tokens: number }) => void
     onError: (message: string) => void
   },
@@ -145,6 +168,42 @@ export function AgentChatPanel({
     question: string
     history: AgentChatTurn[]
   } | null>(null)
+
+  /**
+   * 待提权：需要站长输入管理员密码。
+   *
+   * 字段与 pendingConfirm 同构（都要记住"当时那句问题与历史"），
+   * 因为重发时必须用**完全相同**的输入 ——
+   * 换了历史就可能让模型这次不提议那个操作，白跑一轮。
+   */
+  const [pendingElevation, setPendingElevation] = useState<{
+    request: AgentElevationRequest
+    question: string
+    history: AgentChatTurn[]
+    /** 沿用同一条回复气泡，见 handleElevationSubmit */
+    botId: string
+  } | null>(null)
+  /*
+   * 二次验证复用站点的 reauth 机制（useReauthGuard → POST /api/auth/reauth）。
+   *
+   * 【为什么不自建提权弹窗】
+   * 站点已有一套成熟的二次验证：密码框、错误提示、限流、审计，
+   * 并被群发 / 发放试用额 / 人工入账等七个页面使用。
+   * 再造一个弹窗会让管理员面对两套样式与两个窗口时长的同类操作，
+   * 最终会挑最弱的那个用 —— 那样反而降低了安全性。
+   */
+  const { confirm: requestReauth, dialog: reauthDialog } = useReauthGuard()
+  /*
+   * 是否正在等管理员验证。
+   *
+   * 互斥用 ref 而不是 state：要挡的是"同一个 tick 内被触发两次"，而 setState
+   * 在 React 批处理里要等这一轮渲染结束才生效 —— 那正是第二次调用能穿过去的窗口。
+   * 每次验证都跑一次 bcrypt，并发提交会把 CPU 压满。
+   * state 只负责驱动界面（禁用按钮），不承担互斥职责。
+   */
+  const elevationBusyRef = useRef(false)
+  const [elevationBusy, setElevationBusy] = useState(false)
+
   // 确认后重发期间也要锁住发送：否则站长连点两次"确认"会并发两次写操作。
   const [confirmBusy, setConfirmBusy] = useState(false)
 
@@ -173,7 +232,7 @@ export function AgentChatPanel({
       history: AgentChatTurn[]
       /** 带它就表示这是"确认后重发"，而不是新问题 */
       confirm?: AgentConfirmRequest
-      /** 沿用已有气泡（确认重发时用），不新建 */
+      /** 沿用已有气泡（确认/提权重发时用），不新建 */
       botId?: string
     }) => {
       const { text, history, confirm, botId: reuseId } = opts
@@ -242,6 +301,29 @@ export function AgentChatPanel({
             )
             setPendingConfirm({ request, question: text, history })
           },
+          onElevationRequired: (request) => {
+            /*
+             * 与 onConfirm 同样的处理：服务端不会再发 done，气泡必须停住。
+             * 但文案不同 —— 提权是"先证明你是谁"，不是"等你批准"。
+             * 写成"等你确认"会让站长以为点一下就行，从而在下一个弹窗
+             * 里输入密码时意识到"刚才那步太轻了"。
+             */
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === botId
+                  ? {
+                      ...m,
+                      streaming: false,
+                      content:
+                        request.reason === 'high_risk'
+                          ? `这一步会影响站点数据，需要你再验证一次身份（${request.high_risk_tool ?? '高危操作'}）。`
+                          : '需要你输入管理员密码才能继续。',
+                    }
+                  : m,
+              ),
+            )
+            setPendingElevation({ request, question: text, history, botId })
+          },
           onDone: (result) => {
             setMessages((prev) =>
               prev.map((m) =>
@@ -283,7 +365,8 @@ export function AgentChatPanel({
       // confirmBusy 也要挡：确认重发期间若允许再发一条，两轮会并发写同一批数据。
       // pendingConfirm 也要挡：那表示还有一个没处理完的确认单，
       // 此刻发新问题会让"确认的是哪一句"变得无法追溯。
-      if (!text || busy || confirmBusy || pendingConfirm) return
+      // pendingElevation 同理：那一句还等着重发执行，新问题会让两次写入交叉。
+      if (!text || busy || confirmBusy || pendingConfirm || pendingElevation) return
 
       const history: AgentChatTurn[] = messages
         .filter((m) => !m.error && m.content.trim())
@@ -292,7 +375,7 @@ export function AgentChatPanel({
       setInput('')
       await runTurn({ text, history })
     },
-    [busy, confirmBusy, messages, pendingConfirm, runTurn],
+    [busy, confirmBusy, messages, pendingConfirm, pendingElevation, runTurn],
   )
 
   /*
@@ -302,6 +385,60 @@ export function AgentChatPanel({
    * 新发一句"继续"会让模型重新判断一遍要不要做这件事——而我们要的恰恰是
    * 把它已经决定好的那件事做完。
    */
+  /**
+   * 助手要求重新验证管理员身份：弹密码框，验过后用同一句问题重发。
+   *
+   * 【为什么用 confirm() 而不是 guard(fn)】
+   * guard 的形状是"先执行、撞到 403 再弹窗重试"。而这里是服务端在 SSE 流里
+   * 【主动推事件】告知的，第一轮不会有 403。用 guard 包 runTurn 会变成
+   * "先跑一遍 → 又收到 elevation_required → guard 认定成功 → 永远不弹窗"，
+   * 站长只会看到助手反复说"需要验证"。
+   *
+   * 【为什么重发的是【原问题】而不是空问题】
+   * 服务端在第一轮里已经跑完模型推理、停在"这一步需要验证"的地方。
+   * 重发必须携带完全相同的输入，模型才会再次提出同一个操作。
+   * 若改成"请继续"，模型会因缺少上下文而重新规划，很可能走另一条路。
+   *
+   * 【取消时也要说清"没有执行"】
+   * 与确认弹窗不同，这里取消意味着那次高危操作【没有发生】。
+   * 气泡里如实写明，而不是让界面停在"需要验证"让人以为已经在改。
+   */
+  const handleElevationSubmit = useCallback(async () => {
+    if (!pendingElevation || elevationBusyRef.current) return
+    const { question, history, botId } = pendingElevation
+    elevationBusyRef.current = true
+    setElevationBusy(true)
+    try {
+      // 密码只在弹窗内部流转，confirm 只回传"验没验过"这一个布尔。
+      const verified = await requestReauth()
+      if (!verified) {
+        // 用户点了取消：不发任何请求，但要如实告诉他什么都没发生。
+        setPendingElevation(null)
+        setMessages((prev) =>
+          prev.map((m, i) =>
+            i === prev.length - 1 && m.role === 'assistant'
+              ? { ...m, content: `${m.content}\n（未验证身份，这次操作没有执行）` }
+              : m,
+          ),
+        )
+        return
+      }
+      setPendingElevation(null)
+      /*
+       * 带上 botId 沿用同一条气泡，而不是新起一轮。
+       *
+       * 不沿用的话转写会变成：站长问了一遍 → 助手说"需要验证身份" →
+       * 同一句问题又出现一次 → 助手这次做了。
+       * 中间那条消息是【对站长的指令】，不是结论，
+       * 留着它会让记录同时声称"还没做"和"已经做了"。
+       */
+      await runTurn({ text: question, history, botId })
+    } finally {
+      elevationBusyRef.current = false
+      setElevationBusy(false)
+    }
+  }, [pendingElevation, requestReauth, runTurn])
+
   const handleConfirmAccept = useCallback(async () => {
     if (!pendingConfirm || confirmBusy) return
     const { request, question, history } = pendingConfirm
@@ -311,8 +448,7 @@ export function AgentChatPanel({
   }, [confirmBusy, pendingConfirm, runTurn])
 
   /** 站长点了"取消"：不发请求，只把气泡改成一句实话。 */
-  const handleConfirmCancel = useCallback(() => {
-    setPendingConfirm(null)
+  const handleConfirmCancel = useCallback(() => {    setPendingConfirm(null)
     setMessages((prev) =>
       prev.map((m, i) =>
         i === prev.length - 1 && m.role === 'assistant'
@@ -415,9 +551,9 @@ export function AgentChatPanel({
           ) : (
             <Button
               variant="primary"
-              // 确认单还没处理完时禁用发送：弹窗是遮罩，站长点不到这个按钮，
+              // 确认单/提权单还没处理完时禁用发送：弹窗是遮罩，站长点不到这个按钮，
               // 但键盘 Enter 能触发 handleKeyDown 里的 send。
-              disabled={!input.trim() || pendingConfirm !== null}
+              disabled={!input.trim() || pendingConfirm !== null || pendingElevation !== null}
               onClick={() => void send(input)}
               className="shrink-0"
             >
@@ -442,6 +578,49 @@ export function AgentChatPanel({
             助手准备执行一个会影响线上数据的操作，请在上方弹窗里确认或取消。
           </p>
         )}
+
+        {/*
+          提权提示：先要站长【点一下】，再弹密码框。
+          刻意不自动弹窗——自动弹出的密码框会训练出反射性输入，
+          而反射性输入正是这套机制想防的那件事：真正的价值在于
+          站长在敲密码之前先意识到"这一步要动我的数据了"。
+        */}
+        {pendingElevation && (
+          <div className="mt-2 rounded-md border border-err/30 bg-err/5 px-3 py-2">
+            <p className="text-[12px] leading-relaxed text-ink-2">
+              {pendingElevation.request.reason === 'high_risk'
+                ? `助手准备执行「${pendingElevation.request.high_risk_tool ?? '高危操作'}」，会影响用户权益或站点数据。`
+                : '助手这一步需要管理员身份才能继续。'}
+            </p>
+            <div className="mt-2 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={elevationBusy}
+                onClick={() => {
+                  setPendingElevation(null)
+                  setMessages((prev) =>
+                    prev.map((m, i) =>
+                      i === prev.length - 1 && m.role === 'assistant'
+                        ? { ...m, content: `${m.content}\n（未验证身份，这次操作没有执行）` }
+                        : m,
+                    ),
+                  )
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                loading={elevationBusy}
+                onClick={() => void handleElevationSubmit()}
+              >
+                输入密码继续
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       <AgentConfirmDialog
@@ -450,6 +629,9 @@ export function AgentChatPanel({
         onConfirm={() => void handleConfirmAccept()}
         onCancel={handleConfirmCancel}
       />
+
+      {/* 密码框本体复用站点既有的那一个，见 handleElevationSubmit 的说明 */}
+      {reauthDialog}
     </div>
   )
 }

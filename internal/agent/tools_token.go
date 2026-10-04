@@ -576,7 +576,7 @@ func (t *AgentTools) handleListChannelKeys(ctx context.Context, args json.RawMes
 		out = append(out, brief)
 	}
 
-	// 池为空是一���需要解释的状态：它意味着这个渠道只能靠
+	// 池为空是一个需要解释的状态：它意味着这个渠道只能靠
 	// channels.api_key 上那把自带密钥工作，而"池空"与"没配密钥"
 	// 长得一样 —— 不说清楚，站长会以为助手在胡说。
 	note := ""

@@ -192,6 +192,16 @@ export interface AgentChatInput {
    */
   confirm?: { tool_name: string; params: Record<string, unknown> }
   /**
+   * UAC 提权令牌（仅运维入口生效）。
+   *
+   * 【与 confirm 不可互相替代，也不该合并成一个字段】
+   *   confirm 回答"这次操作你批准了吗"，由模型的行为触发；
+   *   本字段回答"此刻操作的是不是站长本人"，由人的行为触发（输入密码）。
+   *
+   * 合并成"一次授权管到底"就等于取消了 UAC —— 那正是这个功能要消除的东西。
+   */
+  elevation_token?: string
+  /**
    * 指定模型。
    *
    * 【仅运维入口生效】客服入口会忽略它——否则外部人就能指定一个
@@ -259,9 +269,32 @@ export type AgentStreamEvent =
   | { type: 'tool'; tool: { name: string; mutating: boolean } }
   /** 待确认：不是失败，是"等你点头"。前端据此弹窗而非显示报错 */
   | { type: 'confirm'; confirm: AgentConfirmRequest }
+  /**
+   * 需要管理员重新输入密码。
+   *
+   * 【与 confirm 是两种不同的暂停，不可合并成一个弹窗】
+   *
+   *   confirm    问"这次操作你批准吗" —— 针对工具与参数，点"确认"即可；
+   *   elevation 问"你刚验过密码吗"   —— 针对身份新鲜度，必须输密码。
+   *
+   * 合并的话，站长点一下"确认"就被当成身份验证通过，
+   * 高危操作的二次验证就形同虚设。因此必须是独立事件。
+   */
+  | { type: 'elevation_required'; elevation: AgentElevationRequest }
   | { type: 'done'; result: AgentAskResult }
   | { type: 'error'; message: string }
   | { type: 'end' }
+
+/**
+ * 「需要输入管理员密码」的事件负载。
+ */
+export interface AgentElevationRequest {
+  /** missing = 整段对话都需要验证；high_risk = 仅这一步要求更新鲜的验证 */
+  reason: 'missing' | 'high_risk' | string
+  message: string
+  /** 仅 high_risk 时非空：前端要显示是哪一步触发的 */
+  high_risk_tool?: string
+}
 
 // ── 调用 ────────────────────────────────────────────────────────
 

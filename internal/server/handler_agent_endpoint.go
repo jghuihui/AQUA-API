@@ -116,6 +116,16 @@ func (s *Server) handleUpdateAgentEndpoint(c *gin.Context) {
 		return
 	}
 
+	/*
+	 * 改 base_url 就是改【所有对话往哪发】——包括用户的订单号、余额、
+	 * 以及站长在助手框里打过的任何内容。指向一个第三方地址等于把这些
+	 * 交出去，且不像发密钥那样有"一次性明文"之类的显眼痕迹。
+	 * 所以它与发密钥同属高危，用同一档 2 分钟窗口。
+	 */
+	if !s.requireFreshReauthStrict(c) {
+		return
+	}
+
 	var req agentEndpointRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		oai.WriteError(c.Writer, http.StatusBadRequest, "请求体格式错误",
