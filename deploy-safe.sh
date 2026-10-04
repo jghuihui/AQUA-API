@@ -60,14 +60,25 @@ mkdir -p "$BACKUP_DIR"
 cp "$DATA_DIR"/aqua.db* "$BACKUP_DIR"/ 2>/dev/null || true
 chmod u+w "$BACKUP_DIR"/* 2>/dev/null || true
 
-(
-  cd "$BACKUP_DIR"
-  # WAL 里可能有未落盘的数据。不合并就等于只备份了一部分。
-  sqlite3 aqua.db 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null 2>&1 || true
-  INTEGRITY="$(sqlite3 aqua.db 'PRAGMA integrity_check;' 2>/dev/null | head -1)"
-  CHANNELS="$(sqlite3 aqua.db 'SELECT count(*) FROM channels;' 2>/dev/null || echo '?')"
-  USERS="$(sqlite3 aqua.db 'SELECT count(*) FROM users;' 2>/dev/null || echo '?')"
-)
+# 【为什么用绝对路径，而不是 ( cd "$BACKUP_DIR" ; ... ) 包成一个子 shell】
+#
+#   这里原本写的是子 shell。三个变量在子 shell 里赋值、在父 shell 里读，
+#   读到的永远是空串，于是 `${INTEGRITY:-失败}` 恒为"失败"——
+#   脚本每一次都停在下面那个"备份校验不通过"，包括本该放行的部署。
+#   它看起来像一道闸门，实际是把所有情况都判成危险，因此从来没跑完过。
+#
+#   不需要 cd：sqlite3 会把 -wal/-shm 建在库文件旁边，传绝对路径即可。
+BK_DB="$BACKUP_DIR/aqua.db"
+if [ ! -f "$BK_DB" ]; then
+  echo "==> 备份文件不存在: $BK_DB（复制阶段就失败了）" >&2
+  exit 1
+fi
+# WAL 里可能有未落盘的数据。不合并就等于只备份了一部分。
+sqlite3 "$BK_DB" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null 2>&1 || true
+# head -1：integrity_check 正常时只输出一行 "ok"，异常时会输出多行，取首行便于比对。
+INTEGRITY="$(sqlite3 "$BK_DB" 'PRAGMA integrity_check;' 2>/dev/null | head -1)"
+CHANNELS="$(sqlite3 "$BK_DB" 'SELECT count(*) FROM channels;' 2>/dev/null || echo '?')"
+USERS="$(sqlite3 "$BK_DB" 'SELECT count(*) FROM users;' 2>/dev/null || echo '?')"
 echo "==> 备份: $BACKUP_DIR（完整性=${INTEGRITY:-失败} 渠道=$CHANNELS 用户=$USERS）"
 
 if [ "$INTEGRITY" != "ok" ]; then
