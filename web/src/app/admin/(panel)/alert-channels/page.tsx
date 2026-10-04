@@ -37,7 +37,7 @@ import {
   type AlertChannelKinds,
 } from '@/api/alert'
 import { useReauthGuard } from '@/components/auth/ReauthGuard'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, Card, PageHeader } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Switch } from '@/components/ui/Form'
 import { ConfirmDialog, Modal } from '@/components/ui/Modal'
@@ -223,26 +223,23 @@ export default function AdminAlertChannelsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">告警通道</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">
-            渠道熔断、自动停用、账号锁定时自动通知 · 共 {items.length} 条，启用 {enabledCount} 条
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="secondary" onClick={() => void load()} loading={loading}>
-            刷新
-          </Button>
-          <Button variant="primary" onClick={() => setCreating(true)} disabled={!catalog}>
-            新建通道
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="告警通道"
+        desc={`渠道熔断、自动停用、账号锁定时自动通知 · 共 ${items.length} 条，启用 ${enabledCount} 条`}
+        actions={
+          <div className="flex items-center gap-3">
+            <Button variant="secondary" onClick={() => void load()} loading={loading}>
+              刷新
+            </Button>
+            <Button variant="primary" onClick={() => setCreating(true)} disabled={!catalog}>
+              新建通道
+            </Button>
+          </div>
+        }
+      />
 
       <AlertEventExplainer catalog={catalog} />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -251,7 +248,6 @@ export default function AdminAlertChannelsPage() {
           emptyTitle="还没有配置告警通道"
           emptyDescription="未配置时事件只记录在服务端日志里。至少配一条邮件通道，可在站点出问题时第一时间收到通知。"
         />
-      </Card>
 
       <ChannelModal
         open={creating || editing !== null}

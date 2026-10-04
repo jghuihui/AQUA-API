@@ -27,7 +27,7 @@ import {
   type MaintenanceOverview,
   type MaintenanceRetryRatio,
 } from '@/api/maintenance'
-import { Badge, Card, Skeleton, SkeletonRows, StatCard } from '@/components/ui/Display'
+import { Badge, Card, PageHeader, Skeleton, SkeletonRows, StatCard } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { DataTable, type Column } from '@/components/ui/Table'
 import { useToast } from '@/lib/toast/toast-context'
@@ -166,10 +166,7 @@ export default function AdminMaintenancePage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-ink">运维监控</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">运行健康度 · 数据库明细 · 备份管理</p>
-      </div>
+      <PageHeader title="运维监控" desc="运行健康度 · 数据库明细 · 备份管理" />
 
       {/* 顶部指标卡 */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -218,34 +215,30 @@ export default function AdminMaintenancePage() {
       {/* 折扣分组重试率：r = 上游调用次数 / 计费请求次数。
           6 折档的净利本就薄，r 越过保本线（1.37）即正在亏本——必须让它可见。 */}
       {overview && overview.retry_ratios.length > 0 && (
-        <Card padding="none">
-          <div className="flex items-center justify-between border-b border-line px-4 py-3">
-            <h2 className="text-sm font-semibold text-ink">折扣分组重试率</h2>
-            <span className="text-xs text-ink-3">r 越过保本线即亏本；进程内累计，重启归零</span>
-          </div>
-          <DataTable
-            columns={retryRatioColumns}
-            rows={overview.retry_ratios}
-            loading={false}
-            rowKey={(row) => row.group}
-            emptyTitle="暂无折扣分组调用"
-          />
-        </Card>
+        <DataTable
+          columns={retryRatioColumns}
+          rows={overview.retry_ratios}
+          loading={false}
+          rowKey={(row) => row.group}
+          emptyTitle="暂无折扣分组调用"
+          header={
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-ink">折扣分组重试率</h2>
+              <span className="text-xs text-ink-3">r 越过保本线即亏本；进程内累计，重启归零</span>
+            </div>
+          }
+        />
       )}
 
       {/* 数据库表行数 */}
-      <Card padding="none">
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 className="text-sm font-semibold text-ink">数据库表行数</h2>
-        </div>
-        <DataTable
-          columns={tableColumns}
-          rows={loading ? null : (overview?.tables ?? [])}
-          loading={loading}
-          rowKey={(row) => row.name}
-          emptyTitle="未取到表信息"
-        />
-      </Card>
+      <DataTable
+        columns={tableColumns}
+        rows={loading ? null : (overview?.tables ?? [])}
+        loading={loading}
+        rowKey={(row) => row.name}
+        emptyTitle="未取到表信息"
+        header={<h2 className="text-sm font-semibold text-ink">数据库表行数</h2>}
+      />
 
       {/* 备份管理 */}
       <Card padding="none">
@@ -288,6 +281,7 @@ export default function AdminMaintenancePage() {
                 </div>
               )}
               <DataTable
+                bare
                 columns={compareColumns}
                 rows={inspect.tables}
                 rowKey={(row) => row.name}

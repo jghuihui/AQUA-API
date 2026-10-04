@@ -19,15 +19,19 @@ const GROUPS: ShellNavGroup[] = [
     titleKey: 'components.nav.console.overview',
     items: [
       { label: '概览', href: '/console', labelKey: 'components.nav.console.overview', icon: 'home', exact: true },
-      { label: '模型广场', href: '/console/models', labelKey: 'components.nav.console.models', icon: 'grid' },
+      { label: '模型广场', href: '/console/models', labelKey: 'components.nav.console.models', icon: 'grid',
+        keywords: ['价格', '模型列表', '可用模型'] },
     ],
   },
   {
     title: '接入',
     items: [
-      { label: '访问令牌', href: '/console/tokens', labelKey: 'components.nav.console.tokens', icon: 'key' },
-      { label: '接入示例', href: '/#quickstart', labelKey: 'components.nav.console.docs', icon: 'book' },
-      { label: '游乐场', href: '/console/playground', labelKey: 'components.nav.console.playground', icon: 'play' },
+      { label: '访问令牌', href: '/console/tokens', labelKey: 'components.nav.console.tokens', icon: 'key',
+        keywords: ['apikey', '密钥', 'key'] },
+      { label: '接入示例', href: '/#quickstart', labelKey: 'components.nav.console.docs', icon: 'book',
+        keywords: ['文档', '怎么用', 'quickstart', 'curl'] },
+      { label: '游乐场', href: '/console/playground', labelKey: 'components.nav.console.playground', icon: 'play',
+        keywords: ['调试', '试一试', '测试'] },
     ],
   },
   {
@@ -35,13 +39,20 @@ const GROUPS: ShellNavGroup[] = [
     items: [
       // 智能客服放在"我的"组首位：它是登录用户最可能主动找的东西，
       // 而不是必须排在最后的功能之一。
-      { label: '智能客服', href: '/console/support', labelKey: 'components.nav.console.support', icon: 'chat' },
-      { label: '调用日志', href: '/console/logs', labelKey: 'components.nav.console.logs', icon: 'list' },
-      { label: '生成任务', href: '/console/tasks', labelKey: 'components.nav.console.tasks', icon: 'image' },
-      { label: '财务记录', href: '/console/finance', labelKey: 'components.nav.console.finance', icon: 'wallet' },
-      { label: '账户充值', href: '/console/recharge', labelKey: 'components.nav.console.recharge', icon: 'cart' },
-      { label: '邀请奖励', href: '/console/referral', labelKey: 'components.nav.console.referral', icon: 'users' },
-      { label: '第三方账号', href: '/console/accounts', labelKey: 'components.nav.console.externalAccounts', icon: 'external' },
+      { label: '智能客服', href: '/console/support', labelKey: 'components.nav.console.support', icon: 'chat',
+        keywords: ['客服', '问一句', 'ai'] },
+      { label: '调用日志', href: '/console/logs', labelKey: 'components.nav.console.logs', icon: 'list',
+        keywords: ['请求', '消费', '记录'] },
+      { label: '生成任务', href: '/console/tasks', labelKey: 'components.nav.console.tasks', icon: 'image',
+        keywords: ['图片', '视频', '音乐'] },
+      { label: '财务记录', href: '/console/finance', labelKey: 'components.nav.console.finance', icon: 'wallet',
+        keywords: ['账单', '消费明细', '花了多少'] },
+      { label: '账户充值', href: '/console/recharge', labelKey: 'components.nav.console.recharge', icon: 'cart',
+        keywords: ['充值', '付款', '余额', '购买'] },
+      { label: '邀请奖励', href: '/console/referral', labelKey: 'components.nav.console.referral', icon: 'users',
+        keywords: ['邀请', '返利', '推广'] },
+      { label: '第三方账号', href: '/console/accounts', labelKey: 'components.nav.console.externalAccounts', icon: 'external',
+        keywords: ['绑定', '微信', 'github', '登录方式'] },
     ],
   },
 ]

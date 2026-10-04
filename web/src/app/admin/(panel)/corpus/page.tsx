@@ -40,7 +40,7 @@ import {
   type CorpusStats,
 } from '@/api/corpus'
 import { Button } from '@/components/ui/Button'
-import { Badge, Card, CodeBlock, SkeletonRows, StatCard, Tabs } from '@/components/ui/Display'
+import { Badge, Card, CodeBlock, PageHeader, SkeletonRows, StatCard, Tabs } from '@/components/ui/Display'
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/Form'
 import { ConfirmDialog, Modal } from '@/components/ui/Modal'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
@@ -101,12 +101,10 @@ export default function AdminCorpusPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-ink">语料共建</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">
-          维护采集清单与福利授权 · 样本全文查看与 JSONL 导出均会写入审计日志
-        </p>
-      </div>
+      <PageHeader
+        title="语料共建"
+        desc="维护采集清单与福利授权 · 样本全文查看与 JSONL 导出均会写入审计日志"
+      />
 
       {modelsError && (
         <Card className="border-err/30">
@@ -231,7 +229,6 @@ function ModelsSection({ models, onChanged }: { models: CorpusModel[] | null; on
         </Button>
       </div>
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={models}
@@ -240,7 +237,6 @@ function ModelsSection({ models, onChanged }: { models: CorpusModel[] | null; on
           emptyTitle="清单为空"
           emptyDescription="新建第一条语料后，命中该模型的转发请求会被采样入库。"
         />
-      </Card>
 
       {editing !== null && (
         <ModelUpsertModal
@@ -520,7 +516,6 @@ function SamplesSection({ models }: { models: CorpusModel[] }) {
         </div>
       </div>
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={items}
@@ -528,11 +523,9 @@ function SamplesSection({ models }: { models: CorpusModel[] }) {
           loading={loading}
           emptyTitle="没有符合条件的样本"
           emptyDescription="调整筛选条件，或确认清单中的模型已产生调用。"
+          
+          footer={<Pagination page={page} pageSize={SAMPLES_PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={SAMPLES_PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       {/* 全文弹层：唯一能读到对话原文的入口（后端每次都写审计日志） */}
       <Modal open={detailId !== null} onClose={() => setDetailId(null)} title={`样本 #${detailId ?? ''} 全文`} width={880}>
@@ -646,7 +639,6 @@ function StatsSection({ models }: { models: CorpusModel[] }) {
         </div>
       )}
 
-      <Card padding="none">
         <DataTable
           columns={perModelColumns}
           rows={perModel}
@@ -655,7 +647,6 @@ function StatsSection({ models }: { models: CorpusModel[] }) {
           emptyTitle="清单为空"
           emptyDescription="先在「语料清单」里添加要采集的模型，这里才会出现分模型统计。"
         />
-      </Card>
     </div>
   )
 }
@@ -757,7 +748,6 @@ function GrantsSection({ models }: { models: CorpusModel[] }) {
         </Button>
       </div>
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={items}
@@ -766,7 +756,6 @@ function GrantsSection({ models }: { models: CorpusModel[] }) {
           emptyTitle="还没有福利资格"
           emptyDescription="发放资格后，对应用户调用该模型的请求将不计费。"
         />
-      </Card>
 
       {creating && (
         <GrantUpsertModal

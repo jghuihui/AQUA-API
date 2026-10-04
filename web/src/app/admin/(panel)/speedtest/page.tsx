@@ -19,7 +19,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { listChannels } from '@/api/admin'
 import type { Channel } from '@/api/types'
-import { Badge, Card, EmptyState } from '@/components/ui/Display'
+import { Badge, Card, EmptyState, PageHeader } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { useSpeedTestRunner } from '@/components/admin/useSpeedTestRunner'
 import { formatLatency } from '@/utils/format'
@@ -65,12 +65,10 @@ export default function AdminSpeedTestPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-ink">模型测速</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">
-          逐模型测首字延迟（每次约消耗 2~3 token）；结果落库并展示在模型广场
-        </p>
-      </div>
+      <PageHeader
+        title="模型测速"
+        desc="逐模型测首字延迟（每次约消耗 2~3 token）；结果落库并展示在模型广场"
+      />
 
       <Card padding="md">
         <div className="flex flex-wrap items-end gap-4">

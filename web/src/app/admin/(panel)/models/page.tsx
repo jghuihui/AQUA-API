@@ -19,6 +19,7 @@
  */
 'use client'
 
+import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 
 import {
@@ -30,7 +31,7 @@ import {
 } from '@/api/model-entities'
 import type { ModelEntity, ModelReferenceStats } from '@/api/model-entities'
 import { PlazaEmbedded } from '@/components/plaza/PlazaEmbedded'
-import { Badge, Card, Tabs } from '@/components/ui/Display'
+import { Badge, Card, PageHeader, Tabs } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/Form'
@@ -216,17 +217,15 @@ function ModelEntitiesPanel() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">模型实体</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">
-            登记对外模型清单（展示名/厂商/上下文长度/能力标签），供广场展示与引用统计（共 {total} 个）
-          </p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>
-          新建模型
-        </Button>
-      </div>
+      <PageHeader
+        title="模型管理"
+        desc="登记对外模型清单（展示名 / 厂商 / 上下文长度 / 能力标签），供广场展示与引用统计（共 {total} 个）"
+        actions={
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            新建模型
+          </Button>
+        }
+      />
 
       {/* 筛选：草稿态 + 查询按钮（回车同样触发） */}
       <Card>
@@ -263,19 +262,16 @@ function ModelEntitiesPanel() {
         </div>
       </Card>
 
-      <Card padding="none">
-        <DataTable
+      <DataTable
           columns={columns}
           rows={loading ? null : items}
           loading={loading}
           rowKey={(row) => row.id}
           emptyTitle="还没有模型实体"
           emptyDescription="新建模型实体，或从渠道编辑弹层里上游拉取模型后导入。"
+          
+        footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <ModelFormModal
         open={editing !== null}
@@ -533,7 +529,30 @@ function DeleteModelModal({
                   <div className="text-[13px] font-medium text-err">该模型仍被上述配置引用</div>
                   <div className="text-xs leading-relaxed text-err/90">
                     删除后：引用它的令牌与渠道请求将无法命中该模型（线上 404），计价规则失去目标。
-                    建议先到渠道 / 令牌 / 价格页移除引用后再删除。
+                    建议先到下列页面移除引用后再删除。
+                  </div>
+                  {/* 三个可点的入口：这是站长被拦住的那一刻，
+                      他要做的正是去这三处清理 —— 只给一句"建议先去…"，
+                      等于要他自己记住这三个页面在哪。 */}
+                  <div className="flex flex-wrap gap-2 pt-0.5">
+                    <Link
+                      href="/admin/channels"
+                      className="rounded border border-err/30 bg-card px-2 py-0.5 text-xs text-err hover:bg-err/10"
+                    >
+                      渠道管理
+                    </Link>
+                    <Link
+                      href="/admin/tokens"
+                      className="rounded border border-err/30 bg-card px-2 py-0.5 text-xs text-err hover:bg-err/10"
+                    >
+                      令牌管理
+                    </Link>
+                    <Link
+                      href="/admin/prices"
+                      className="rounded border border-err/30 bg-card px-2 py-0.5 text-xs text-err hover:bg-err/10"
+                    >
+                      计价规则
+                    </Link>
                   </div>
                   <label className="flex items-start gap-2 text-[13px] text-ink-2">
                     <input

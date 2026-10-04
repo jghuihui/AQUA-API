@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { listAllLogs } from '@/api/admin'
 import type { LogQuery, UsageLog } from '@/api/types'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, Card, PageHeader } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select } from '@/components/ui/Form'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
@@ -173,10 +173,7 @@ export default function AdminLogsPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-ink">调用日志</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">全站请求明细（{formatNumber(total)} 条）</p>
-      </div>
+      <PageHeader title="调用日志" desc={`全站请求明细（${formatNumber(total)} 条）`} />
 
       {/* 筛选条 */}
       <Card>
@@ -205,7 +202,6 @@ export default function AdminLogsPage() {
       </Card>
 
       {/* 列表 + 分页 */}
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -213,11 +209,9 @@ export default function AdminLogsPage() {
           rowKey={(row) => row.id}
           emptyTitle="暂无日志"
           emptyDescription="调整筛选条件试试，或等有调用后再回来。"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
     </div>
   )
 }

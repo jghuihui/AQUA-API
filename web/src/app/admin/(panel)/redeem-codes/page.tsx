@@ -12,7 +12,7 @@ import {
 } from '@/api/admin'
 import type { CreateRedeemCodesResult, RedeemCode } from '@/api/types'
 import { REDEEM_STATUS_UNUSED, REDEEM_STATUS_USED, REDEEM_STATUS_VOID } from '@/api/types'
-import { Badge, Card, CodeBlock } from '@/components/ui/Display'
+import { Badge, CodeBlock, PageHeader } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input } from '@/components/ui/Form'
@@ -152,20 +152,20 @@ export default function AdminRedeemCodesPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">兑换码</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">批量生成、分发与作废兑换码（{total}）</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={handleClearInvalid}>
-            清理失效
-          </Button>
-          <Button variant="primary" onClick={() => setGenerateOpen(true)}>
-            批量生成
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="兑换码"
+        desc={`批量生成、分发与作废兑换码（${total}）`}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={handleClearInvalid}>
+              清理失效
+            </Button>
+            <Button variant="primary" onClick={() => setGenerateOpen(true)}>
+              批量生成
+            </Button>
+          </div>
+        }
+      />
 
       {/* 筛选条：关键词（码/备注）+ 批次号 */}
       <div className="flex flex-wrap items-end gap-3">
@@ -203,7 +203,6 @@ export default function AdminRedeemCodesPage() {
         </Button>
       </div>
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -211,11 +210,9 @@ export default function AdminRedeemCodesPage() {
           rowKey={(row) => row.id}
           emptyTitle="没有符合条件的兑换码"
           emptyDescription="调整筛选条件，或点「批量生成」创建一批新码"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <RedeemGenerateModal
         open={generateOpen}

@@ -27,6 +27,7 @@
  */
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
@@ -37,7 +38,8 @@ import {
   type ChannelHealthResult,
   type ChannelProbeTimeline,
 } from '@/api/channelHealth'
-import { Badge, Card, EmptyState, Skeleton, StatCard } from '@/components/ui/Display'
+import { Button } from '@/components/ui/Button'
+import { Badge, Card, EmptyState, PageHeader, Skeleton, StatCard } from '@/components/ui/Display'
 import { EChart } from '@/components/ui/EChart'
 import { DataTable, type Column } from '@/components/ui/Table'
 import { useToast } from '@/lib/toast/toast-context'
@@ -60,6 +62,7 @@ const WINDOW_LABELS: Record<number, string> = {
 
 export default function AdminChannelHealthPage() {
   const { toastError } = useToast()
+  const router = useRouter()
   const { resolved } = useTheme()
 
   const [windowHours, setWindowHours] = useState<number>(24)
@@ -274,14 +277,10 @@ export default function AdminChannelHealthPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">渠道健康看板</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">
-            各渠道的调用成功率与巡检探针延迟。点一行看该渠道的延迟时间线。
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+      <PageHeader
+        title="渠道健康看板"
+        desc="各渠道的调用成功率与巡检探针延迟。点一行看该渠道的延迟时间线。"
+        actions={
           <div className="flex flex-wrap gap-1">
             {WINDOW_OPTIONS.map((h) => (
               <button
@@ -298,8 +297,8 @@ export default function AdminChannelHealthPage() {
               </button>
             ))}
           </div>
-        </div>
-      </div>
+        }
+      />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="渠道总数" value={stats ? String(stats.total) : '—'} hint={`${stats?.enabled ?? 0} 启用`} />
@@ -337,7 +336,15 @@ export default function AdminChannelHealthPage() {
         rowKey={(row) => row.channel_id}
         loading={loading}
         emptyTitle="还没有渠道"
-        emptyDescription="先到「渠道管理」里添加一个上游渠道。"
+        emptyDescription="添加一个上游渠道后，这里才会有成功率与延迟数据。"
+        emptyAction={
+          /* 刻意给真按钮而不是纯文字"先到「渠道管理」"：
+             空态是站长第一次走到这一页的时刻，此时他不知道该去哪，
+             而本页的用途就是巡检——没有渠道时他必然要去建一个。 */
+          <Button variant="primary" size="sm" onClick={() => router.push('/admin/channels')}>
+            去添加渠道
+          </Button>
+        }
         onRowClick={(row) => setSelectedId((prev) => (prev === row.channel_id ? 0 : row.channel_id))}
       />
 

@@ -20,7 +20,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { fetchSettings, fetchSMTP, testSMTP, updateSettings, updateSMTP } from '@/api/admin'
 import type { PaymentChannel, PaymentSettings, SeoSettings, SiteSettings, SMTPSettings, SpeedTestSettings, UpdateSiteSettingsPayload } from '@/api/types'
-import { Badge, Card, SkeletonRows, Tabs } from '@/components/ui/Display'
+import { Badge, Card, PageHeader, SkeletonRows, Tabs } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Switch, Textarea } from '@/components/ui/Form'
 import { useToast } from '@/lib/toast/toast-context'
@@ -303,10 +303,10 @@ export default function AdminSettingsPage() {
   if (loading) {
     return (
       <div className="space-y-5">
-        <div>
-          <h1 className="text-xl font-bold text-ink">系统设置</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">站点 · SEO · 支付 · 测速 · 合规 · 邮件通道</p>
-        </div>
+        {/* 刻意与下面的正常态用同一个 PageHeader：
+            此前两处各写一遍标题，加载完成时外层布局从裸 div 变成
+            flex justify-between，页面头部会肉眼可见地跳一下。 */}
+        <PageHeader title="系统设置" desc="站点 · SEO · 支付 · 测速 · 合规 · 邮件通道" />
         <Card>
           <SkeletonRows rows={8} />
         </Card>
@@ -316,13 +316,15 @@ export default function AdminSettingsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">系统设置</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">站点 · SEO · 支付 · 测速 · 合规 · 邮件通道</p>
-        </div>
-        <Button variant="primary" loading={saving} onClick={handleSave}>保存设置</Button>
-      </div>
+      <PageHeader
+        title="系统设置"
+        desc="站点 · SEO · 支付 · 测速 · 合规 · 邮件通道"
+        actions={
+          <Button variant="primary" loading={saving} onClick={handleSave}>
+            保存设置
+          </Button>
+        }
+      />
 
       <Tabs items={TABS} value={tab} onChange={setTab} />
 

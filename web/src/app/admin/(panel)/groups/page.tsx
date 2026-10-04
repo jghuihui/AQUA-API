@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { createGroup, deleteGroup, listGroups, updateGroup } from '@/api/admin'
 import type { ModelGroup, ModelGroupPayload } from '@/api/types'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Switch, Textarea } from '@/components/ui/Form'
@@ -147,15 +147,16 @@ export default function AdminGroupsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">模型分组</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">计费倍率与解锁门槛（共 {total} 个分组）</p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>新建分组</Button>
-      </div>
+      <PageHeader
+        title="模型分组"
+        desc={`计费倍率与解锁门槛（共 ${total} 个分组）`}
+        actions={
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            新建分组
+          </Button>
+        }
+      />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -164,7 +165,6 @@ export default function AdminGroupsPage() {
           emptyTitle="还没有模型分组"
           emptyDescription="新建一个分组来定义计费倍率与解锁门槛"
         />
-      </Card>
 
       <GroupFormModal
         open={editing !== null}

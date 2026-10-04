@@ -8,21 +8,26 @@
  *   因此本页不是"设置表单 + 聊天窗口"两张皮，而是一页三段：
  *
  *     ①助手（对话）—— 就在最上面，因为它是最常用的
- *     ②运行配置   —— 总开关、模型、两段提示词
+ *     ②运行配置   —— 总开关、上游、模型、两段提示词
  *     ③密钥管理   —— 给外部人发"只能问客服"的钥匙
  *
  *   顺序刻意如此：配置写错时站长最需要的不是文档而是"问它一句"，
  *   让助手自己回答"我该配什么"比读文档更快。
  *
+ *   「独立上游」放在运行配置里而不是单独一个标签页：它与模型选择是
+ *   同一件决策的两半（"跟谁说话"和"说什么"），拆到两个标签页会让人
+ *   以为填完一边就够了。
+ *
  * 三处安全取舍：
  *   1) 密钥明文【只显示一次】，本窗口关掉就再也拿不到（服务端只存摘要）；
+ *      独立上游的 API Key 更严格——服务端连明文都不回传，只给"是否已配置"；
  *   2) 写配置与发密钥都要过一次 reauth（useReauthGuard）——
  *      能改客服提示词 = 能改本站对外说话的嘴；能发密钥 = 能让外部人用站长的钱；
  *   3) 提示词留空 = 用内置底稿，这一点由后端下发标记告知，
  *      不在前端自己判断（理由见 api/agent.ts 的 AgentSettings 注释）。
  *
  * 流转（Flow）：
- *   本页 → api/agent.ts → /api/admin/agent/{settings,keys} 与 /api/admin/agent/chat
+ *   本页 → api/agent.ts → /api/admin/agent/{settings,endpoint,keys} 与 /api/admin/agent/chat
  *
  * 扩展（Extend）：
  *   服务端加工具时本页无需改动——工具清单随 SSE 的 tool 事件下发，
@@ -35,10 +40,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   createAgentKey,
   deleteAgentKey,
+  fetchAgentEndpoint,
   fetchAgentKeys,
   fetchAgentSettings,
+  saveAgentEndpoint,
   saveAgentSettings,
   updateAgentKey,
+  type AgentEndpoint,
+  type AgentEndpointKind,
   type AgentKeyItem,
   type AgentRole,
   type AgentSettings,
@@ -46,7 +55,7 @@ import {
 import { chatWithOps } from '@/api/agent'
 import { AgentChatPanel, type AskFn } from '@/components/agent/AgentChatPanel'
 import { useReauthGuard } from '@/components/auth/ReauthGuard'
-import { Badge, Card, Tabs } from '@/components/ui/Display'
+import { Badge, Card, PageHeader, Tabs } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Switch, Textarea } from '@/components/ui/Form'
 import { ConfirmDialog, Modal } from '@/components/ui/Modal'
@@ -77,12 +86,29 @@ export default function AdminAgentPage() {
    */
   const [plainKey, setPlainKey] = useState<string | null>(null)
 
+  /**
+   * 独立上游配置提到父组件，不放在 EndpointForm 里自己取。
+   *
+   * 原因是状态药丸（StatusPill）也要用它：它要显示"真正在用的模型"，
+   * 而不只是运行配置里填的那个。若让子组件自己持有这份状态，
+   * 父组件就永远不知道当前用的是哪套上游——于是两处显示会不一致，
+   * 而这种不一致恰恰是排查时最难发现的那类问题。
+   *
+   * 顺带省掉一次请求：与配置、密钥列表同一个 Promise.all。
+   */
+  const [endpoint, setEndpoint] = useState<AgentEndpoint | null>(null)
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [cfg, list] = await Promise.all([fetchAgentSettings(), fetchAgentKeys()])
+      const [cfg, list, ep] = await Promise.all([
+        fetchAgentSettings(),
+        fetchAgentKeys(),
+        fetchAgentEndpoint(),
+      ])
       setSettings(cfg)
       setKeys(list)
+      setEndpoint(ep)
     } catch (err) {
       toastError(err instanceof Error ? err.message : '助手配置加载失败')
     } finally {
@@ -180,24 +206,40 @@ export default function AdminAgentPage() {
   // 这一层薄适配放在页面里而不是组件里：组件不该知道三种凭据的区别。
   const ask: AskFn = useCallback(
     async (input, handlers, signal) => {
-      await chatWithOps(input, (event) => {
-        switch (event.type) {
-          case 'delta':
-            handlers.onDelta(event.text)
-            break
-          case 'tool':
-            handlers.onTool(event.tool.name, event.tool.mutating)
-            break
-          case 'done':
-            handlers.onDone(event.result)
-            break
-          case 'error':
-            handlers.onError(event.message)
-            break
-          case 'end':
-            break
-        }
-      }, signal)
+      // confirm 原样透传：组件已经把它压成 {tool_name, params}，
+      // 这里不做任何加工——加工就等于给"展示什么"与"执行什么"之间开了个口子。
+      await chatWithOps(
+        {
+          question: input.question,
+          history: input.history,
+          ...(input.confirm
+            ? { confirm: { tool_name: input.confirm.tool_name, params: input.confirm.params } }
+            : {}),
+        },
+        (event) => {
+          switch (event.type) {
+            case 'delta':
+              handlers.onDelta(event.text)
+              break
+            case 'tool':
+              handlers.onTool(event.tool.name, event.tool.mutating)
+              break
+            case 'confirm':
+              // 面板可能没挂这个回调（组件接口允许可选），此处不能硬调。
+              handlers.onConfirm?.(event.confirm)
+              break
+            case 'done':
+              handlers.onDone(event.result)
+              break
+            case 'error':
+              handlers.onError(event.message)
+              break
+            case 'end':
+              break
+          }
+        },
+        signal,
+      )
     },
     [],
   )
@@ -206,21 +248,18 @@ export default function AdminAgentPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">AI 助手</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">
-            你可以直接在这里问它站点的事（能查数据、能改配置），
-            也可以把「在线客服」开放给用户登录后使用
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <StatusPill settings={settings} />
-          <Button variant="secondary" onClick={() => void load()} loading={loading}>
-            刷新
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="AI 助手"
+        desc="你可以直接在这里问它站点的事（能查数据、能改配置），也可以把「在线客服」开放给用户登录后使用"
+        actions={
+          <div className="flex items-center gap-3">
+            <StatusPill settings={settings} endpoint={endpoint} />
+            <Button variant="secondary" onClick={() => void load()} loading={loading}>
+              刷新
+            </Button>
+          </div>
+        }
+      />
 
       {!settings?.enabled && (
         <Card>
@@ -270,8 +309,8 @@ export default function AdminAgentPage() {
               ask={ask}
               showTools
               emptyTitle="问我站点里的事"
-              emptyDescription="我能查渠道、令牌、订单、用户、日志，也能改部分配置。比如「现在有哪些渠道熔断了」「帮我看看哪个用户欠费」或「把 X 渠道权重调成 5」。不确定问什么时，先问「你能做什么」。"
-              footerHint="助手能改动线上配置。涉及删除、封禁这类不可逆操作时我会先跟你确认。"
+              emptyDescription="我能查渠道、令牌、密钥、用户、订单和调用日志，也能改渠道权重、启停渠道与令牌、给用户和令牌调额度。不确定问什么时，先问「你能做什么」。"
+              footerHint="助手能改动线上配置。封禁用户、改额度这类会影响真实用户的操作，我会先把「改的是谁、改什么」列给你确认，确认后才执行。"
             />
           ) : (
             <DisabledHint />
@@ -282,6 +321,13 @@ export default function AdminAgentPage() {
       {tab === 'settings' && settings && (
         <SettingsForm
           settings={settings}
+          endpoint={endpoint}
+          onEndpointSaved={(next) => {
+            setEndpoint(next)
+            // 重新拉一次：保存独立上游可能顺带改动了总开关
+            // （表单里的 Switch 直接带 enabled），而那个值本页只认父组件这份。
+            void load()
+          }}
           onSaved={(next) => {
             setSettings(next)
             void load()
@@ -291,20 +337,18 @@ export default function AdminAgentPage() {
 
       {tab === 'keys' && (
         <>
-          <Card padding="none">
-            <DataTable
-              columns={keyColumns({
-                busyId,
-                onToggleStatus: handleToggleKeyStatus,
-                onDelete: setDeleteTarget,
-              })}
-              rows={loading ? null : keys}
-              loading={loading}
-              rowKey={(row) => row.id}
-              emptyTitle="还没有发放任何密钥"
-              emptyDescription="密钥用于让网站外部的人（小程序、第三方站点、脚本）直接问在线客服，不需要登录本站账号。若只想让本站登录用户使用，可以不发密钥——用户门户里已经有客服入口。"
-            />
-          </Card>
+          <DataTable
+            columns={keyColumns({
+              busyId,
+              onToggleStatus: handleToggleKeyStatus,
+              onDelete: setDeleteTarget,
+            })}
+            rows={loading ? null : keys}
+            loading={loading}
+            rowKey={(row) => row.id}
+            emptyTitle="还没有发放任何密钥"
+            emptyDescription="密钥用于让网站外部的人（小程序、第三方站点、脚本）直接问在线客服，不需要登录本站账号。若只想让本站登录用户使用，可以不发密钥——用户门户里已经有客服入口。"
+          />
           <Card>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-[13px] text-ink-2">
@@ -353,14 +397,33 @@ export default function AdminAgentPage() {
  *
  * 做成"看得见但不能点"的一颗药丸而不是开关本身：
  * 停用助手要过密码验证，不该由一次误点触发。
+ *
+ * 【模型名要显示"真正在用的那个"】
+ *   独立上游配了模型时，助手用的是它而不是「运行配置」里的。
+ *   这里若照旧显示运行配置的模型名，站长会看到"配置了 X、
+ *   状态栏也写着 X"，但实际请求发的是另一个模型——
+ *   而这类不一致在排查时最难发现。
  */
-function StatusPill({ settings }: { settings: AgentSettings | null }) {
+function StatusPill({
+  settings,
+  endpoint,
+}: {
+  settings: AgentSettings | null
+  endpoint?: AgentEndpoint | null
+}) {
   if (!settings) return null
   if (!settings.enabled) return <Badge tone="off">已停用</Badge>
-  const model = settings.ops_model || settings.default_model
+  // 与服务端 resolveEndpointModel 同口径：只有"配齐了"的独立上游才算数，
+  // 配了一半时助手仍走渠道。
+  const model =
+    (endpoint?.enabled && endpoint.configured && endpoint.model) ||
+    settings.ops_model ||
+    settings.default_model
+  const upstream = endpoint?.enabled && endpoint.configured ? ' · 独立上游' : ''
   return (
     <Badge tone="ok">
       运行中{model ? ` · ${model}` : ''}
+      {upstream}
     </Badge>
   )
 }
@@ -383,9 +446,17 @@ function DisabledHint() {
 function SettingsForm({
   settings,
   onSaved,
+  endpoint,
+  onEndpointSaved,
 }: {
   settings: AgentSettings
   onSaved: (next: AgentSettings) => void
+  /**
+   * 独立上游配置由父组件持有（因为状态药丸也要读它），
+   * 这里透传下去而不是自己再取一份。
+   */
+  endpoint: AgentEndpoint | null
+  onEndpointSaved: (next: AgentEndpoint) => void
 }) {
   const { toast, toastError } = useToast()
   const [defaultModel, setDefaultModel] = useState(settings.default_model)
@@ -588,7 +659,214 @@ function SettingsForm({
           </Button>
         </div>
       </Card>
+
+      {/*
+        独立上游放在运行配置的最后：它是"可选的加强"，不是必填项。
+        放在模型选择之前会让人以为必须先配它才能用助手——
+        而实际上默认（未启用）就是借渠道，那才是多数站长的处境。
+      */}
+      <EndpointForm endpoint={endpoint} onSaved={onEndpointSaved} />
     </div>
+  )
+}
+
+/* ── 独立上游 ───────────────────────────────────────────────── */
+
+/**
+ * EndpointForm：给助手单独配一套上游（base_url + api_key + 模型）。
+ *
+ * 【为什么独立于「运行配置」的其他字段】
+ *   上面那些是"用什么模型、说什么话"（行为约定），这一项是
+ *   "往哪发请求、用哪把凭据"（连接信息）。两者各自独立变化：
+ *   换个便宜的模型不该动地址，换地址也不该顺手重置提示词。
+ *
+ * 【为什么密钥框永远为空】
+ *   服务端不回传（明文与密文都不下发），所以每次进来都是空的。
+ *   因此这里的语义是"留空 = 沿用已存的那把"，不是"清空密钥"。
+ *   这一点必须在 help 文案里说清，否则用户看到空框会以为密钥丢了，
+ *   进而去重新填一遍（而重新填本身没问题，只是白白多一次请求）。
+ *
+ * 【配置不全时不做本地拦截，交给后端报错】
+ *   刻意不在前端复刻"地址与密钥必须成对存在"这条规则：
+ *   两处判定迟早漂移，而漂移的表现是"前端放行、后端拒绝"。
+ *   前端只做【提示】（"还差 API Key"），拦截交给唯一权威。
+ */
+function EndpointForm({
+  endpoint,
+  onSaved,
+}: {
+  endpoint: AgentEndpoint | null
+  onSaved: (next: AgentEndpoint) => void
+}) {
+  const { toast, toastError } = useToast()
+  const [saving, setSaving] = useState(false)
+  const [baseURL, setBaseURL] = useState('')
+  const [apiKey, setAPIKey] = useState('')
+  const [model, setModel] = useState('')
+  const [kind, setKind] = useState<AgentEndpointKind>('openai')
+  const [enabled, setEnabled] = useState(false)
+  /**
+   * 首次拿到配置时才灌进表单，之后不再覆盖。
+   *
+   * 用一个"灌过没有"的标记而不是每次都同步：
+   * 每次同步都会把用户正在输入的内容冲掉——
+   * 而"保存后 apiKey 输入框要清空"这件事本来也该由本组件自己管。
+   */
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    if (hydrated || !endpoint) return
+    setBaseURL(endpoint.base_url)
+    setModel(endpoint.model)
+    setKind(endpoint.kind)
+    setEnabled(endpoint.enabled)
+    setHydrated(true)
+  }, [endpoint, hydrated])
+
+  /**
+   * 本地只判断"还差什么"用于提示，不阻止提交。
+   * 真正的拦截在服务端（见 model.AgentEndpoint.Validate）。
+   */
+  const missing = (() => {
+    if (!baseURL.trim() && !apiKey.trim() && !endpoint?.api_key_set) return null
+    if (!baseURL.trim()) return '还缺接口地址'
+    if (!apiKey.trim() && !endpoint?.api_key_set) return '还缺 API Key'
+    return null
+  })()
+
+  async function handleSave(nextEnabled = enabled) {
+    setSaving(true)
+    try {
+      const saved = await saveAgentEndpoint({
+        base_url: baseURL.trim(),
+        // 留空就不传这个字段：服务端据此沿用旧密钥。
+        // 传空串与不传在这里是同一件事，但语义上"不传"更准确地表达
+        // "我没打算改它"，且不依赖服务端的空串约定。
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+        model: model.trim(),
+        kind,
+        enabled: nextEnabled,
+      })
+      setBaseURL(saved.base_url)
+      setModel(saved.model)
+      setKind(saved.kind)
+      setEnabled(saved.enabled)
+      // 存完就清空输入框：它已经落库了，继续留在框里会让人
+      // 误以为"还没保存"，而下次进来它必然是空的。
+      setAPIKey('')
+      onSaved(saved)
+      toast(nextEnabled ? '独立上游已启用' : '配置已保存（未启用）')
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!endpoint) {
+    return (
+      <Card>
+        <div className="py-6 text-center text-[13px] text-ink-3">正在读取独立上游配置…</div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-[13px] font-semibold text-ink">独立上游</h2>
+          <p className="mt-0.5 text-[13px] text-ink-3">
+            给助手单独配一套接口地址与密钥，不再借用「渠道管理」里的渠道。
+            不启用时助手照旧走渠道——这是默认状态，也是最保险的选择。
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {endpoint?.enabled && endpoint.configured ? (
+            <Badge tone="ok">已启用</Badge>
+          ) : endpoint?.enabled ? (
+            <Badge tone="warn">未配齐</Badge>
+          ) : (
+            <Badge tone="off">借用渠道</Badge>
+          )}
+          <Switch
+            checked={enabled}
+            onChange={(next) => {
+              // 打开开关时把表单一起提交，而不是先切开关再让用户
+              // 忘了保存内容——那会留下"开关开着、地址还是旧的"这种状态。
+              void handleSave(next)
+            }}
+            label="启用独立上游"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <Field label="接口地址" help="带不带 /v1 都行，拼接时会自动去重">
+          <Input
+            value={baseURL}
+            onChange={(e) => setBaseURL(e.target.value)}
+            placeholder="https://api.example.com/v1"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+        <Field label="API Key" help={endpoint?.api_key_set ? '已配置，留空表示不修改' : '尚未配置'}>
+          <Input
+            value={apiKey}
+            onChange={(e) => setAPIKey(e.target.value)}
+            type="password"
+            placeholder={endpoint?.api_key_set ? '••••••••（留空不修改）' : 'sk-...'}
+            autoComplete="new-password"
+            spellCheck={false}
+          />
+        </Field>
+        <Field label="协议类型" help="绝大多数第三方上游都是 OpenAI 兼容">
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as AgentEndpointKind)}
+            className="w-full rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-ink"
+          >
+            {/* 选项由服务端下发（见 api/agent.ts 的 AgentEndpointKindOption）：
+                前端硬编码一份的话，后端将来加一种协议时这个下拉框会漏掉，
+                表现是"明明支持了却选不了"。 */}
+            {(endpoint?.kind_options ?? []).map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="模型名" help="留空则沿用上面「模型选择」里填的">
+          <Input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="留空 = 用运行配置的模型"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+      </div>
+
+      {missing && enabled && (
+        <p className="mt-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] leading-relaxed text-warn">
+          {missing}。两项都填齐才会真正启用——在此之前助手仍走渠道，
+          这样你填一半也不会让助手突然变不可用。
+        </p>
+      )}
+
+      <p className="mt-3 text-[12px] leading-relaxed text-ink-3">
+        为什么要单独配一套：助手一轮对话要发多次请求，业务流量被限流时
+        最先被掐断的往往是它；给问答任务单独挑一个便宜快的模型，
+        也不必动到影响全站的渠道配置。密钥与 SMTP 口令同样加密落库，
+        接口永不回传，只保留"是否已配置"。
+      </p>
+
+      <div className="mt-5 flex justify-end">
+        <Button variant="primary" loading={saving} onClick={() => void handleSave()}>
+          保存独立上游
+        </Button>
+      </div>
+    </Card>
   )
 }
 

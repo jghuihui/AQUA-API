@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { listAuditLogs, type AuditLog } from '@/api/audit'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, Card, PageHeader } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { Field, Input } from '@/components/ui/Form'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
@@ -137,10 +137,7 @@ export default function AdminAuditLogsPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-ink">操作审计</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">后台写操作留痕（共 {total} 条）</p>
-      </div>
+      <PageHeader title="操作审计" desc={`后台写操作留痕（共 ${total} 条）`} />
 
       {/* 筛选条 */}
       <Card>
@@ -165,7 +162,6 @@ export default function AdminAuditLogsPage() {
       </Card>
 
       {/* 列表 + 分页 */}
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -173,11 +169,9 @@ export default function AdminAuditLogsPage() {
           rowKey={(row) => row.id}
           emptyTitle="暂无审计记录"
           emptyDescription="后台写操作较少，或在筛选范围内没有记录。"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
     </div>
   )
 }

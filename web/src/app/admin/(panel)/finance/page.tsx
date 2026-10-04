@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { api } from '@/api/client'
-import { Badge, Card, Tabs } from '@/components/ui/Display'
+import { Badge, Card, PageHeader, Tabs } from '@/components/ui/Display'
 import { DataTable, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input } from '@/components/ui/Form'
@@ -203,10 +203,7 @@ export default function AdminFinancePage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-ink">财务对账</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">按维度聚合「售价收入 − 上游成本」毛利，金额已换算为人民币</p>
-      </div>
+      <PageHeader title="财务对账" desc="按维度聚合「售价收入 − 上游成本」毛利，金额已换算为人民币" />
 
       <Card>
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -225,6 +222,9 @@ export default function AdminFinancePage() {
         </div>
       </Card>
 
+      {/* 本区块在 error 时不渲染表格，因此不能整体换成 DataTable 的 header 槽位。
+          做法：Card 提供标题栏与错误态的外框，表格用 bare 嵌在卡片下半部，
+          两层容器合并成一层（此前是 Card 里再套一个自带描边的 DataTable）。 */}
       <Card padding="none">
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h2 className="text-sm font-semibold text-ink">对账明细</h2>
@@ -242,6 +242,7 @@ export default function AdminFinancePage() {
           </div>
         ) : (
           <DataTable
+            bare
             columns={columns}
             rows={loading ? null : rows}
             loading={loading}

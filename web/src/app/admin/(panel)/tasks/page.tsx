@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { cancelTask, listAllTasks } from '@/api/admin'
 import type { Task } from '@/api/types'
 import { TASK_STATUS_CANCELED, TASK_STATUS_FAILED, TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_SUCCEEDED } from '@/api/types'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Select } from '@/components/ui/Form'
 import { ConfirmDialog } from '@/components/ui/Modal'
@@ -155,10 +155,7 @@ export default function AdminTasksPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-ink">异步任务</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">全站图像 / 视频 / 音乐生成任务（每 5 秒自动刷新）</p>
-      </div>
+      <PageHeader title="异步任务" desc="全站图像 / 视频 / 音乐生成任务（每 5 秒自动刷新）" />
 
       {/* 筛选条：类别 + 状态 */}
       <div className="flex flex-wrap items-center gap-3">
@@ -188,7 +185,6 @@ export default function AdminTasksPage() {
         </Select>
       </div>
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -196,11 +192,9 @@ export default function AdminTasksPage() {
           rowKey={(row) => row.task_ref}
           emptyTitle="没有符合条件的任务"
           emptyDescription="调整筛选条件，或等待新任务产生"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <ConfirmDialog
         open={Boolean(cancelTarget)}

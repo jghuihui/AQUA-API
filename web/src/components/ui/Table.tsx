@@ -34,7 +34,41 @@ interface DataTableProps<T> {
   loading?: boolean
   emptyTitle?: string
   emptyDescription?: string
+  /**
+   * 空态里的行动按钮（如"还没有渠道"→ 直接给个"去添加渠道"）。
+   *
+   * 为什么必须支持：空态是站长第一次走到这一页的时刻，
+   * 他此刻最需要的不是一句描述，而是一个能立刻解决问题的入口。
+   * 只给纯文字"请先到渠道管理"等于要他在 20+ 项导航里自己找那一项。
+   */
+  emptyAction?: ReactNode
   onRowClick?: (row: T) => void
+  /**
+   * 表格上方的标题区（如"无映射渠道"这类分节标题）。
+   *
+   * 为什么用槽位而不是让调用方在外面套一层 Card：
+   * 本组件自带 `rounded-lg border border-line bg-card` 容器，
+   * 外面再套一个 Card 会出现两层圆角矩形（内白外灰的"相框"效果）。
+   * 此前全站有 18 处这么写，而正确写法（裸放）只出现 1 处——
+   * 同一份代码库里并存两种相反做法时，少数派才是对的。
+   * 槽位把"表格 + 标题 + 分页"收成一层容器，调用方无需判断该套不该套。
+   */
+  header?: ReactNode
+  /**
+   * 表格下方的辅助区，通常放 `<Pagination />`。
+   *
+   * 同样是为了收进同一层容器：分页条与表格共享一个边框，
+   * 而不是一个悬在表格下方的独立方块。
+   */
+  footer?: ReactNode
+  /**
+   * 去掉自身的外框（圆角 + 描边 + 背景）。
+   *
+   * 用于「表格被包在一个已有边框的容器里」的场景，例如带标题栏的 Card。
+   * 此前这类场景只能用负 margin 硬掰，脆弱且在容器 padding 一变就错位；
+   * 更早的做法是外面再套一层 Card，于是出现双层描边。
+   */
+  bare?: boolean
 }
 
 export function DataTable<T>({
@@ -44,13 +78,27 @@ export function DataTable<T>({
   loading,
   emptyTitle,
   emptyDescription,
+  emptyAction,
   onRowClick,
+  header,
+  footer,
+  bare,
 }: DataTableProps<T>) {
   const { t } = useI18n()
   const loadingState = loading || rows === null
 
   return (
-    <div className="overflow-hidden rounded-lg border border-line bg-card">
+    <div
+      className={
+        bare
+          ? // bare 模式下外框交给调用方的容器，本组件只负责表格本身。
+            // 表头仍保留 bg-surface/70 与 border-b —— 那是表头自身的底色与分隔线，
+            // 去掉会让表头与第一行糊在一起。
+            ''
+          : 'overflow-hidden rounded-lg border border-line bg-card'
+      }
+    >
+      {header ? <div className="border-b border-line px-4 py-3">{header}</div> : null}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <thead>
@@ -101,6 +149,7 @@ export function DataTable<T>({
                   <EmptyState
                     title={emptyTitle ?? t('components.dataState.empty')}
                     description={emptyDescription}
+                    action={emptyAction}
                   />
                 </td>
               </tr>
@@ -108,6 +157,10 @@ export function DataTable<T>({
           </tbody>
         </table>
       </div>
+      {/* 分页条紧贴表格下沿：加 border-t 而不是留白，
+          否则它看起来像一个与表格无关的独立方块。
+          顶部不加 padding —— Pagination 自带 pt-3，两处都加会显得过分松散。 */}
+      {footer ? <div className="border-t border-line px-4 pb-2">{footer}</div> : null}
     </div>
   )
 }

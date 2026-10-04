@@ -40,7 +40,7 @@ import { ChannelHealthPanel } from '@/components/admin/ChannelHealthPanel'
 import { ChannelKeyPool } from '@/components/admin/ChannelKeyPool'
 import { ChannelModelMappings } from '@/components/admin/ChannelModelMappings'
 import { SpeedTestModal } from '@/components/admin/SpeedTestModal'
-import { Badge, Card, EmptyState, Tabs } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/Form'
@@ -195,23 +195,22 @@ export default function AdminChannelsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">{t('admin.channels.title')}</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">{t('admin.channels.subtitle', { total })}</p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>{t('admin.channels.create')}</Button>
-      </div>
+      <PageHeader
+        title={t('admin.channels.title')}
+        desc={t('admin.channels.subtitle', { total })}
+        actions={
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            {t('admin.channels.create')}
+          </Button>
+        }
+      />
 
       {/* 健康概览：渠道状态分布 + 近 24h 全站调用健康度 */}
       <ChannelHealthPanel />
 
-      <Card padding="none">
-        <DataTable columns={columns} rows={loading ? null : items} loading={loading} rowKey={(row) => row.id} emptyTitle={t('admin.channels.emptyTitle')} />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
+      <DataTable columns={columns} rows={loading ? null : items} loading={loading} rowKey={(row) => row.id} emptyTitle={t('admin.channels.emptyTitle')}
+        footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
+      />
 
       {/* 测活结果弹层 */}
       <Modal open={Boolean(testResult)} onClose={() => setTestResult(null)} title={t('admin.channels.result.title')} width={560}>

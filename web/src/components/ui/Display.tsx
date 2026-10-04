@@ -190,3 +190,42 @@ export function Tabs<T extends string>({ items, value, onChange }: TabsProps<T>)
     </div>
   )
 }
+/* ── PageHeader：页面标题区 ────────────────────────────── */
+
+/**
+ * 页面头部：标题 + 副标题 + 右侧操作区。
+ *
+ * 意图（Why）：
+ *   此前 27 个后台页面各自手写头部，量出 3 种外层布局
+ *   （items-start / items-center / 裸 div），还有 loading 态与正常态
+ *   各写一遍标题（settings 页切换时头部会跳变）。
+ *   更麻烦的是「预留了操作区却没放东西」—— orders 页的
+ *   `justify-between` 右侧是空的，看上去像加载失败。
+ *
+ * 流转（Flow）：
+ *   <PageHeader title="…" desc="…" actions={<Button …/>} />
+ *
+ * 为什么 actions 是显式的具名槽位而不是 children：
+ *   具名槽位让「这个页面到底有没有主行动按钮」变成编译期可见的事。
+ *   传空 actions 时右侧不渲染任何占位 —— 宁可什么都没有，
+ *   也不要留一个空的对齐槽（它比没有更让人以为这里本该有东西）。
+ */
+interface PageHeaderProps {
+  title: string
+  /** 副标题：一句话说清这一页能做什么、不能做什么 */
+  desc?: ReactNode
+  /** 右侧操作区；不传则整块不渲染 */
+  actions?: ReactNode
+}
+
+export function PageHeader({ title, desc, actions }: PageHeaderProps) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h1 className="text-xl font-bold text-ink">{title}</h1>
+        {desc ? <p className="mt-0.5 text-[13px] text-ink-3">{desc}</p> : null}
+      </div>
+      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+    </div>
+  )
+}

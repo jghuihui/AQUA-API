@@ -27,7 +27,7 @@ import {
   updateSensitiveWord,
 } from '@/api/safeguard'
 import type { SensitiveWord, SensitiveWordPayload } from '@/api/types'
-import { Badge, Card, EmptyState } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Switch, Textarea } from '@/components/ui/Form'
 import { Modal, ConfirmDialog } from '@/components/ui/Modal'
@@ -160,24 +160,21 @@ export default function AdminSensitiveWordsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">内容安全</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">
-            敏感词过滤总开关：{masterEnabled ? '已开启' : '已关闭'} · 生效中 {enabledTotal} 条
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-[13px] text-ink-2">
-            <Switch checked={masterEnabled} disabled={masterBusy} onChange={handleMasterToggle} label="敏感词过滤总开关" />
-            总开关
-          </label>
-          <Button variant="secondary" onClick={() => setImporting(true)}>批量导入</Button>
-          <Button variant="primary" onClick={() => setCreating(true)}>新建词条</Button>
-        </div>
-      </div>
+      <PageHeader
+        title="敏感词"
+        desc={`过滤总开关：${masterEnabled ? '已开启' : '已关闭'} · 生效中 ${enabledTotal} 条`}
+        actions={
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-[13px] text-ink-2">
+              <Switch checked={masterEnabled} disabled={masterBusy} onChange={handleMasterToggle} label="敏感词过滤总开关" />
+              总开关
+            </label>
+            <Button variant="secondary" onClick={() => setImporting(true)}>批量导入</Button>
+            <Button variant="primary" onClick={() => setCreating(true)}>新建词条</Button>
+          </div>
+        }
+      />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -186,7 +183,6 @@ export default function AdminSensitiveWordsPage() {
           emptyTitle="还没有敏感词"
           emptyDescription="新建单条或批量导入，并确保顶部总开关已开启。"
         />
-      </Card>
 
       {/* 新建词条弹层 */}
       <CreateWordModal

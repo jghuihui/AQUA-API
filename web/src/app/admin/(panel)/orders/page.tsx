@@ -7,7 +7,7 @@ import { closeOrder, listAllOrders, markOrderPaid } from '@/api/admin'
 import { useReauthGuard } from '@/components/auth/ReauthGuard'
 import type { PaymentOrder } from '@/api/types'
 import { ORDER_STATUS_PAID, ORDER_STATUS_PENDING } from '@/api/types'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/Modal'
@@ -115,14 +115,8 @@ export default function AdminOrdersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">充值订单</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">全站充值订单，可人工入账或关闭（{total}）</p>
-        </div>
-      </div>
+      <PageHeader title="充值订单" desc={`全站充值订单，可人工入账或关闭（${total}）`} />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -130,11 +124,9 @@ export default function AdminOrdersPage() {
           rowKey={(row) => row.trade_no}
           emptyTitle="还没有订单"
           emptyDescription="用户发起充值的订单会出现在这里"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <ConfirmDialog
         open={Boolean(confirmAction)}

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { createOAuthProvider, deleteOAuthProvider, listOAuthProviders, updateOAuthProvider } from '@/api/admin'
 import type { OAuthProvider, OAuthProviderPayload } from '@/api/types'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Switch } from '@/components/ui/Form'
@@ -84,17 +84,16 @@ export default function AdminOAuthPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">订阅账号</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">OAuth 提供方配置，订阅账号凭据刷新令牌时使用（{total}）</p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>
-          新建提供方
-        </Button>
-      </div>
+      <PageHeader
+        title="订阅账号"
+        desc={`OAuth 提供方配置，订阅账号凭据刷新令牌时使用（${total}）`}
+        actions={
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            新建提供方
+          </Button>
+        }
+      />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -103,7 +102,6 @@ export default function AdminOAuthPage() {
           emptyTitle="还没有 OAuth 提供方"
           emptyDescription="新建提供方后，订阅账号凭据才能刷新访问令牌"
         />
-      </Card>
 
       <OAuthFormModal
         open={editing !== null}

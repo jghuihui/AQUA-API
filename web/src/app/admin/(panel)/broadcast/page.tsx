@@ -35,7 +35,7 @@ import {
   type EmailBroadcast,
   type RecipientStatus,
 } from '@/api/broadcast'
-import { Badge, Card, EmptyState, SkeletonRows, Tabs } from '@/components/ui/Display'
+import { Badge, EmptyState, SkeletonRows, Tabs } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Modal, ConfirmDialog } from '@/components/ui/Modal'
@@ -203,19 +203,16 @@ export default function AdminBroadcastPage() {
         </div>
       </div>
 
-      <Card padding="none">
-        <DataTable
+      <DataTable
           columns={columns}
           rows={loading ? null : items}
           loading={loading}
           rowKey={(row) => row.id}
           emptyTitle="还没有群发记录"
           emptyDescription="点「发起群发」，按向导先预览再确认发送"
+          
+        footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <BroadcastWizardModal
         open={wizardOpen}

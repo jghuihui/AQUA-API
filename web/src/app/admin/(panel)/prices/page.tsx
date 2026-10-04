@@ -27,7 +27,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/api/client'
 import { createPrice, deletePrice, listChannels, listGroups, listPrices, updatePrice } from '@/api/admin'
 import type { BillingMode, ModelPrice, ModelPricePayload, QuotePreview } from '@/api/types'
-import { Badge, Card, Tabs } from '@/components/ui/Display'
+import { Badge, Card, PageHeader, Tabs } from '@/components/ui/Display'
 import { DataTable, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/Form'
@@ -196,13 +196,15 @@ export default function AdminPricesPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">计价规则</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">模型售价（每 1M token 额度 / 每次调用额度，共 {total} 条）</p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>新建规则</Button>
-      </div>
+      <PageHeader
+        title="计价规则"
+        desc={`模型售价（每 1M token 额度 / 每次调用额度，共 ${total} 条）`}
+        actions={
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            新建规则
+          </Button>
+        }
+      />
 
       {/* 分组筛选：空串 = 全部 */}
       <Tabs
@@ -229,7 +231,6 @@ export default function AdminPricesPage() {
         </p>
       </div>
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -238,7 +239,6 @@ export default function AdminPricesPage() {
           emptyTitle="还没有计价规则"
           emptyDescription="为模型配上售价，未定价的模型默认不计费"
         />
-      </Card>
 
       {/* 费用试算：放在页尾，不打断上方「筛选 → 管理规则」的主流程 */}
       <QuoteCard groups={groups} />

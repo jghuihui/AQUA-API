@@ -25,7 +25,7 @@ import {
   type AnnouncementLevel,
   type AnnouncementPayload,
 } from '@/api/announcement'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/Form'
@@ -137,15 +137,16 @@ export default function AdminAnnouncementsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">站点公告</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">前台横幅与公告列表的内容来源（共 {total} 条）</p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>新建公告</Button>
-      </div>
+      <PageHeader
+        title="站点公告"
+        desc={`前台横幅与公告列表的内容来源（共 ${total} 条）`}
+        actions={
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            新建公告
+          </Button>
+        }
+      />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -153,11 +154,9 @@ export default function AdminAnnouncementsPage() {
           rowKey={(row) => row.id}
           emptyTitle="还没有公告"
           emptyDescription="新建一条公告，它将出现在前台横幅与公告列表"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <AnnouncementFormModal
         open={editing !== null}

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createTokenForUser, deleteToken, getTokenKey, listAllTokens, updateToken } from '@/api/admin'
 import type { AccessToken, AdminUpdateTokenPayload, CreateTokenPayload } from '@/api/types'
 import { STATUS_DISABLED, STATUS_ENABLED } from '@/api/types'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Switch } from '@/components/ui/Form'
@@ -191,17 +191,16 @@ export default function AdminTokensPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">令牌管理</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">全站 API 访问令牌（{total}）</p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing('new')}>
-          新建令牌
-        </Button>
-      </div>
+      <PageHeader
+        title="令牌管理"
+        desc={`全站 API 访问令牌（${total}）`}
+        actions={
+          <Button variant="primary" onClick={() => setEditing('new')}>
+            新建令牌
+          </Button>
+        }
+      />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -209,11 +208,9 @@ export default function AdminTokensPage() {
           rowKey={(row) => row.id}
           emptyTitle="还没有令牌"
           emptyDescription="为用户创建的 API 令牌会出现在这里"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <TokenFormModal
         open={editing !== null}

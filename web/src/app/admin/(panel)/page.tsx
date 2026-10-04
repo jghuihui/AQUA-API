@@ -5,11 +5,12 @@
  */
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
 import { fetchDashboard } from '@/api/admin'
 import type { DashboardStats } from '@/api/types'
-import { Card, Skeleton, StatCard } from '@/components/ui/Display'
+import { Card, PageHeader, Skeleton, StatCard } from '@/components/ui/Display'
 import { EChart } from '@/components/ui/EChart'
 import { useTheme, isDarkScheme } from '@/lib/theme/theme-context'
 import { chartStyles } from '@/utils/chart'
@@ -65,17 +66,23 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold text-ink">仪表盘</h1>
-        <p className="mt-0.5 text-[13px] text-ink-3">全站运行概览</p>
-      </div>
+      <PageHeader title="仪表盘" desc="全站运行概览" />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="渠道"
-          value={stats ? String(stats.channels.total) : '—'}
-          hint={`${stats?.channels.enabled ?? 0} 启用 · ${stats?.channels.auto_disabled ?? 0} 自动停用`}
-        />
+        {/* 渠道卡做成可点的：它展示的是「渠道健康」页 StatCard 的子集，
+            两者本该是同一件事的概览与详情。不可点的话站长在这里看到
+            "3 个自动停用"却只能自己去侧栏找渠道健康，白白多绕一圈。 */}
+        <Link
+          href="/admin/channel-health"
+          className="rounded-lg transition-opacity hover:opacity-80"
+          aria-label="查看渠道健康看板"
+        >
+          <StatCard
+            label="渠道"
+            value={stats ? String(stats.channels.total) : '—'}
+            hint={`${stats?.channels.enabled ?? 0} 启用 · ${stats?.channels.auto_disabled ?? 0} 自动停用`}
+          />
+        </Link>
         <StatCard label="用户" value={stats ? String(stats.users.total) : '—'} hint={`${stats?.users.active ?? 0} 活跃`} />
         <StatCard label="令牌" value={stats ? String(stats.tokens.total) : '—'} hint={`${stats?.tokens.enabled ?? 0} 启用`} />
         <StatCard

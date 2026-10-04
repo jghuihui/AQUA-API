@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createUser, deleteUser, grantTrialQuota, listUsers, updateUser } from '@/api/admin'
 import type { AdminUser, CreateUserPayload, UpdateUserPayload } from '@/api/types'
 import { STATUS_DISABLED, STATUS_ENABLED } from '@/api/types'
-import { Badge, Card } from '@/components/ui/Display'
+import { Badge, PageHeader } from '@/components/ui/Display'
 import { DataTable, Pagination, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Field, Input, Select, Switch } from '@/components/ui/Form'
@@ -126,22 +126,21 @@ export default function AdminUsersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-ink">用户管理</h1>
-          <p className="mt-0.5 text-[13px] text-ink-3">平台全部注册用户（{total}）</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={() => setTrialOpen(true)}>
-            发放试用
-          </Button>
-          <Button variant="primary" onClick={() => setEditing('new')}>
-            新建用户
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="用户管理"
+        desc={`平台全部注册用户（${total}）`}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setTrialOpen(true)}>
+              发放试用
+            </Button>
+            <Button variant="primary" onClick={() => setEditing('new')}>
+              新建用户
+            </Button>
+          </div>
+        }
+      />
 
-      <Card padding="none">
         <DataTable
           columns={columns}
           rows={loading ? null : items}
@@ -149,11 +148,9 @@ export default function AdminUsersPage() {
           rowKey={(row) => row.id}
           emptyTitle="还没有用户"
           emptyDescription="注册用户会出现在这里"
+          
+          footer={<Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage}  />}
         />
-        <div className="px-4 pb-3">
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
-        </div>
-      </Card>
 
       <UserFormModal
         open={editing !== null}
