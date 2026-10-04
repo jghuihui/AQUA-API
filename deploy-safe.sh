@@ -188,21 +188,56 @@ open(out_path, 'w').write('\n'.join(lines) + '\n')
 PY
 
 cd "$APP_DIR"
+
+# 项目名可能为空：容器若是用 docker run 手工起的就没有 compose 标签。
+# 把空串传给 -p 会让 compose 回退到"用目录名当项目名"，那个名字随部署路径变化，
+# 于是它既认不出旧容器、又可能算出另一个名字 —— 必须给一个确定值。
+# 现网就是这么踩到的：容器无标签 → 项目名落空 → up 与旧容器撞名。
+[ -n "$PROJECT" ] || PROJECT=aqua-api
+[ -n "$SERVICE" ] || SERVICE=aqua
+
 docker compose -p "$PROJECT" config > /dev/null || {
   echo "==> compose 校验失败，中止。容器未被改动" >&2
   exit 1
 }
-echo "==> compose 合法，开始切换"
-docker compose -p "$PROJECT" up -d 2>&1 | tail -3
+echo "==> compose 合法，开始切换（项目=$PROJECT 服务=$SERVICE）"
+
+# 【不能吞掉 up 的退出码】
+#   这里原本写的是 `up -d 2>&1 | tail -3`。管道让整条命令的退出码变成
+#   tail 的（恒为 0），于是 up 失败也继续往下走。
+#   实测正是这样：容器名冲突导致 up 失败，脚本一路走到第 6 步，
+#   而那时的 healthz 命中的是【一直没停的旧容器】——报出了"部署完成"。
+#   先收进变量再打印，退出码才拿得到。
+UP_OUT="$(docker compose -p "$PROJECT" up -d 2>&1)"
+UP_RC=$?
+printf '%s\n' "$UP_OUT" | tail -3
 
 # ── 第 6 步：启动后核对 ────────────────────────────────────────
+#
+# 【为什么必须先验"跑的是不是新镜像"，而不能只看 healthz】
+#   healthz 只证明"8788 上有个健康的东西在答"。旧容器没被换掉时，
+#   它答得一样正确 —— 上一步那个假阳性就是这么来的：
+#   报"部署完成"的那一刻，接口 uptime 是 3 小时前的。
+#   判断"部署成功"的证据只能是【镜像标签对上了】，健康检查是第二步。
 sleep 15
+
+RUNNING_IMAGE="$(docker inspect aqua-api --format '{{.Config.Image}}' 2>/dev/null || echo '')"
+echo "==> 运行中的镜像: ${RUNNING_IMAGE:-（取不到）}（目标: aqua-api:$TAG）"
+
+if [ "$UP_RC" != "0" ] || [ "$RUNNING_IMAGE" != "aqua-api:$TAG" ]; then
+  echo "==> 切换未生效，部署【未】完成" >&2
+  echo "==> 若 up 报容器名冲突：旧容器不是本项目的，需先 docker rename 腾出名字" >&2
+  echo "==> 数据备份在 $BACKUP_DIR" >&2
+  echo "==> 回滚：把 $APP_DIR/docker-compose.yml 里的 image 改回 aqua-api:rollback-$STAMP，再 docker compose -p $PROJECT up -d" >&2
+  exit 1
+fi
+
 HEALTH="$(curl -s --max-time 10 http://127.0.0.1:8788/healthz || echo 'no-response')"
 echo "==> healthz: $HEALTH"
 case "$HEALTH" in
-  *'"status":"ok"'*) echo "==> 部署完成" ;;
+  *'"status":"ok"'*) echo "==> 部署完成（镜像已确认为 aqua-api:$TAG）" ;;
   *)
-    echo "==> 健康检查未通过。若因数据问题，备份在 $BACKUP_DIR" >&2
-    echo "==> 回滚：docker tag aqua-api:rollback-$STAMP aqua-api:$CUR_IMAGE && docker compose -p $PROJECT up -d" >&2
+    echo "==> 新镜像已起但健康检查未通过。若因数据问题，备份在 $BACKUP_DIR" >&2
+    echo "==> 回滚：把 $APP_DIR/docker-compose.yml 里的 image 改回 aqua-api:rollback-$STAMP，再 docker compose -p $PROJECT up -d" >&2
     exit 1 ;;
 esac
