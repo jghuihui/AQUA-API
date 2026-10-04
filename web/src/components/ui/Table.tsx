@@ -3,6 +3,12 @@
  * 意图（Why）：
  *   后台几乎每页都是「筛选 + 表格 + 分页」范式；把表格收敛成列定义数组，
  *   页面只需声明列与渲染函数，保证列对齐（数字右对齐、文本左对齐）全站一致。
+ *
+ * Fluent 化要点：
+ *   - 行悬停用半透明叠加层 bg-layer，而不是 bg-surface/60：
+ *     后者在暗色主题下会把行刷成【比卡片更深的灰】，看起来像在表格上挖了洞；
+ *   - 表头文字用 ink-2（次级文字）而不是 ink-3：列头是全表最重要的定位信息，
+ *     做到"浅到几乎看不见"只是显得干净，代价是每看一次表都要凑近读一次。
  */
 'use client'
 
@@ -92,17 +98,17 @@ export function DataTable<T>({
       className={
         bare
           ? // bare 模式下外框交给调用方的容器，本组件只负责表格本身。
-            // 表头仍保留 bg-surface/70 与 border-b —— 那是表头自身的底色与分隔线，
+            // 表头仍保留底色与 border-b —— 那是表头自身的底色与分隔线，
             // 去掉会让表头与第一行糊在一起。
             ''
-          : 'overflow-hidden rounded-lg border border-line bg-card'
+          : 'overflow-hidden rounded-lg border border-line bg-card shadow-flat'
       }
     >
       {header ? <div className="border-b border-line px-4 py-3">{header}</div> : null}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="border-b border-line bg-surface/70 text-[13px] text-ink-3">
+            <tr className="border-b border-line bg-layer text-[13px] text-ink-2">
               {columns.map((col, index) => (
                 <th
                   key={index}
@@ -127,8 +133,8 @@ export function DataTable<T>({
                 <tr
                   key={rowKey(row)}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  className={`border-b border-line/70 transition last:border-0 ${
-                    onRowClick ? 'cursor-pointer hover:bg-surface/60' : 'hover:bg-surface/40'
+                  className={`border-b border-line/70 transition-colors duration-150 ease-fluent last:border-0 hover:bg-layer ${
+                    onRowClick ? 'cursor-pointer' : ''
                   }`}
                 >
                   {columns.map((col, index) => (
@@ -210,8 +216,8 @@ export function Pagination({ page, pageSize, total, onChange }: PaginationProps)
             key={p}
             type="button"
             onClick={() => onChange(p)}
-            className={`min-w-7 rounded px-1.5 py-1 text-[13px] transition ${
-              p === page ? 'bg-brand text-on-brand' : 'text-ink-3 hover:bg-ink/5 hover:text-ink'
+            className={`fluent-focus min-w-7 rounded-sm px-1.5 py-1 text-[13px] tabular-nums transition duration-150 ease-fluent ${
+              p === page ? 'bg-brand font-medium text-on-brand' : 'text-ink-3 hover:bg-layer hover:text-ink'
             }`}
           >
             {p}

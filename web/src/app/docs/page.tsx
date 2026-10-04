@@ -339,7 +339,7 @@ function EndpointCard({ path, method, op }: EndpointItem) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition duration-150 ease-fluent hover:bg-layer"
       >
         <span
           className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-bold ${METHOD_STYLE[method] ?? 'bg-ink/8 text-ink-3'}`}

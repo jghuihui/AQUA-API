@@ -31,7 +31,7 @@ const NAV = [
 ]
 
 export function SiteHeader({ transparent: _transparent = false }: { transparent?: boolean }) {
-  const { isLoggedIn, displayName } = useAuth()
+  const { ready, isLoggedIn, displayName } = useAuth()
   const { status, siteName } = useSite()
 
   return (
@@ -42,7 +42,7 @@ export function SiteHeader({ transparent: _transparent = false }: { transparent?
         </Link>
 
         {/* 运行标签：等宽 + 状态点，给技术站一个「在线」的信号 */}
-        <span className="hidden shrink-0 items-center gap-1.5 rounded border border-line bg-surface px-2 py-0.5 font-mono text-[11px] text-ink-3 lg:inline-flex">
+        <span className="hidden shrink-0 items-center gap-1.5 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-[11px] text-ink-3 lg:inline-flex">
           <span className="h-1.5 w-1.5 rounded-full bg-ok" />
           v{status?.version || '2'} · OpenAI 兼容
         </span>
@@ -52,7 +52,7 @@ export function SiteHeader({ transparent: _transparent = false }: { transparent?
             <Link
               key={item.href}
               href={item.href}
-              className="rounded-md px-2.5 py-1.5 font-mono text-[13px] text-ink-2 transition hover:bg-ink/5 hover:text-ink"
+              className="fluent-focus rounded-sm px-2.5 py-1.5 font-mono text-[13px] text-ink-2 transition duration-150 ease-fluent hover:bg-layer hover:text-ink"
             >
               {item.label}
             </Link>
@@ -62,10 +62,18 @@ export function SiteHeader({ transparent: _transparent = false }: { transparent?
         <div className="ml-auto flex items-center gap-1.5 md:ml-3">
           <ThemeToggle compact />
           <LocaleSwitcher compact />
-          {isLoggedIn ? (
+          {/* 必须等 ready 之后再决定渲染哪一支。
+              本站是静态导出：SSG 时读不到令牌（它在 localStorage 里），
+              服务端必然渲出「登录 / 注册」，而客户端首帧渲出「账号 / 进入控制台」——
+              两边不一致，React 会把整棵顶栏丢弃重建，用户看到的是
+              右边按钮"闪一下再变成另一个"。
+              占位块给了同样的高度（h-8），所以替换时顶栏不会跳高。 */}
+          {!ready ? (
+            <span className="inline-block h-8 w-28 rounded-sm bg-layer" aria-hidden="true" />
+          ) : isLoggedIn ? (
             <Link
               href="/console"
-              className="flex items-center gap-1 rounded-md border border-line-2 px-2.5 py-1.5 font-mono text-[13px] text-ink-2 transition hover:border-brand hover:text-brand"
+              className="fluent-focus flex items-center gap-1 rounded-sm border border-line-2 px-2.5 py-1.5 font-mono text-[13px] text-ink-2 transition duration-150 ease-fluent hover:border-brand hover:bg-layer hover:text-brand"
             >
               {displayName}
               <AppIcon name="chevron-right" size={14} />
@@ -74,13 +82,13 @@ export function SiteHeader({ transparent: _transparent = false }: { transparent?
             <>
               <Link
                 href="/login"
-                className="rounded-md px-2.5 py-1.5 font-mono text-[13px] text-ink-2 transition hover:text-ink"
+                className="fluent-focus rounded-sm px-2.5 py-1.5 font-mono text-[13px] text-ink-2 transition duration-150 ease-fluent hover:bg-layer hover:text-ink"
               >
                 登录
               </Link>
               <Link
                 href="/register"
-                className="rounded-md bg-brand px-3 py-1.5 font-mono text-[13px] font-medium text-on-brand transition hover:bg-brand/90"
+                className="fluent-focus rounded-sm border border-white/10 bg-brand px-3 py-1.5 font-mono text-[13px] font-medium text-on-brand transition duration-150 ease-fluent hover:bg-brand/90"
               >
                 注册
               </Link>

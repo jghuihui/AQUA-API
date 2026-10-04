@@ -54,7 +54,11 @@ function SectionHead({ index, title, desc, anchorId }: { index: string; title: s
 
 function Hero() {
   const { status } = useSite()
-  const { isLoggedIn } = useAuth()
+  const { ready, isLoggedIn } = useAuth()
+  // 静态导出下服务端读不到令牌（它在 localStorage 里），必然渲成"未登录"。
+  // 必须等 ready 之后再按登录态渲染：否则客户端首帧与 SSR 的 HTML 不一致，
+  // React 会丢弃整棵子树重建（表现就是这段文案"闪一下才变对"）。
+  const loggedIn = ready && isLoggedIn
   const sampleModel = status?.models?.[0] || 'LTZY-CALL/deepseek-v4-flash'
 
   const [origin, setOrigin] = useState('https://ltzy.top')
@@ -100,9 +104,9 @@ function Hero() {
           </p>
 
           <div className="mt-7 flex flex-wrap gap-3">
-            <Link href={isLoggedIn ? '/console' : '/register'}>
+            <Link href={loggedIn ? '/console' : '/register'}>
               <Button variant="primary" size="lg">
-                {isLoggedIn ? '进入控制台' : '注册并获取令牌'}
+                {loggedIn ? '进入控制台' : '注册并获取令牌'}
                 <AppIcon name="chevron-right" size={16} />
               </Button>
             </Link>
@@ -300,7 +304,7 @@ function ModelPreview() {
                   </tr>
                 ))
               : rows.map((m) => (
-                  <tr key={m.model} className="bg-card transition hover:bg-surface/60">
+                  <tr key={m.model} className="bg-card transition-colors duration-150 ease-fluent hover:bg-layer">
                     <td className="px-4 py-2.5 font-mono text-ink">{m.model}</td>
                     <td className="hidden px-4 py-2.5 font-mono text-ink-3 sm:table-cell">
                       {m.groups?.join(' / ') || '—'}
@@ -439,24 +443,28 @@ function Faq() {
 /* ── CTA ────────────────────────────────────────────────── */
 
 function Cta() {
-  const { isLoggedIn } = useAuth()
+  const { ready, isLoggedIn } = useAuth()
+  // 静态导出下服务端读不到令牌（它在 localStorage 里），必然渲成"未登录"。
+  // 必须等 ready 之后再按登录态渲染：否则客户端首帧与 SSR 的 HTML 不一致，
+  // React 会丢弃整棵子树重建（表现就是这段文案"闪一下才变对"）。
+  const loggedIn = ready && isLoggedIn
   return (
     <section className="border-t border-line bg-card">
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-14 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-ink sm:text-3xl">
-            {isLoggedIn ? '从一把新令牌开始。' : '从一把令牌开始。'}
+            {loggedIn ? '从一把新令牌开始。' : '从一把令牌开始。'}
           </h2>
           <p className="mt-2.5 max-w-xl text-[14px] leading-relaxed text-ink-2">
-            {isLoggedIn
+            {loggedIn
               ? '接进现有代码就行，先跑通一个请求，再决定要不要留下。'
               : '注册免费，先跑通一个请求，再决定要不要留下。'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Link href={isLoggedIn ? '/console' : '/register'}>
+          <Link href={loggedIn ? '/console' : '/register'}>
             <Button variant="primary" size="lg">
-              {isLoggedIn ? '进入控制台' : '注册并获取令牌'}
+              {loggedIn ? '进入控制台' : '注册并获取令牌'}
               <AppIcon name="chevron-right" size={16} />
             </Button>
           </Link>

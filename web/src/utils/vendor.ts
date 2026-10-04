@@ -74,9 +74,17 @@ export function vendorInitial(vendor: string): string {
   return label.slice(0, 1).toUpperCase()
 }
 
-/** 头像配色候选：统一走「浅色底 + 深色字 + 内描边」；
- *  夜间主题下 `text-*-700` 在深底上几乎看不清，故每项补 dark: 变体提到 300 档。 */
-const VENDOR_TONES = [
+/**
+ * 身份色板：一组「浅色底 + 深色字 + 内描边」的配色，厂商头像与用户头像共用。
+ *
+ * 为什么把它导出成公共常量而不是各自留一份：
+ *   这段 8 色数组原本在 vendor.ts 与 UsageLeaderboard.tsx 里各写了一份逐字相同的副本。
+ *   只要有人调了其中一份，同一个用户在两个页面就会显示成两种颜色 ——
+ *   而「看起来是对的」的复制粘贴不会产生任何报错，这类分叉只能靠人去发现。
+ *
+ * 每项都带 dark: 变体：`text-*-700` 在深底上几乎看不清，必须提到 300 档。
+ */
+export const IDENTITY_TONES = [
   'bg-cyan-500/10 text-cyan-700 ring-cyan-500/25 dark:bg-cyan-400/15 dark:text-cyan-300 dark:ring-cyan-400/30',
   'bg-indigo-500/10 text-indigo-700 ring-indigo-500/25 dark:bg-indigo-400/15 dark:text-indigo-300 dark:ring-indigo-400/30',
   'bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/15 dark:text-emerald-300 dark:ring-emerald-400/30',
@@ -88,13 +96,24 @@ const VENDOR_TONES = [
 ]
 
 /**
- * 厂商配色：对厂商名做简单稳定哈希后取模。
- * 用 djb2 的变体而非 Math.random —— 必须在多次渲染、多个组件间保持一致。
+ * 稳定哈希：djb2 变体。
+ * 为什么不用 Math.random —— 同一个名字必须在多次渲染、多个组件、多个页面间
+ * 始终保持同一颜色；随机取色会让头像每刷新一次就换一个色。
  */
-export function vendorTone(vendor: string): string {
+function hashSeed(seed: string): number {
   let hash = 5381
-  for (let index = 0; index < vendor.length; index += 1) {
-    hash = (hash * 33 + vendor.charCodeAt(index)) % 1_000_003
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 33 + seed.charCodeAt(index)) % 1_000_003
   }
-  return VENDOR_TONES[hash % VENDOR_TONES.length]
+  return hash
+}
+
+/** 按种子（厂商名 / 用户名）取一个稳定的身份色 */
+export function identityTone(seed: string): string {
+  return IDENTITY_TONES[hashSeed(seed) % IDENTITY_TONES.length]
+}
+
+/** 厂商配色：对厂商名做稳定哈希后取模 */
+export function vendorTone(vendor: string): string {
+  return identityTone(vendor)
 }

@@ -151,7 +151,7 @@ function ModelTile({ model, onClick }: { model: PlazaModel; onClick: () => void 
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col rounded-lg border border-line bg-card p-4 text-left transition hover:border-line-2 hover:bg-surface/70"
+      className="flex flex-col rounded-lg border border-line bg-card p-4 text-left transition hover:border-line-2 hover:bg-layer"
     >
       <div className="flex items-center gap-2">
         <span className={`flex h-8 w-8 items-center justify-center rounded-full ring-1 text-sm font-semibold ${vendorTone(vendor)}`}>

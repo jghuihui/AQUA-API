@@ -26,27 +26,7 @@ import type { LeaderboardEntry, LeaderboardStats } from '@/api/types'
 import { useAuth } from '@/lib/auth/auth-context'
 import { StatCard } from '@/components/ui/Display'
 import { formatNumber } from '@/utils/format'
-
-/** 头像配色候选（与 utils/vendor.ts 同风格：浅底深字 + 内描边，昼夜两套） */
-const AVATAR_TONES = [
-  'bg-cyan-500/10 text-cyan-700 ring-cyan-500/25 dark:bg-cyan-400/15 dark:text-cyan-300 dark:ring-cyan-400/30',
-  'bg-indigo-500/10 text-indigo-700 ring-indigo-500/25 dark:bg-indigo-400/15 dark:text-indigo-300 dark:ring-indigo-400/30',
-  'bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/15 dark:text-emerald-300 dark:ring-emerald-400/30',
-  'bg-amber-500/10 text-amber-700 ring-amber-500/25 dark:bg-amber-400/15 dark:text-amber-300 dark:ring-amber-400/30',
-  'bg-rose-500/10 text-rose-700 ring-rose-500/25 dark:bg-rose-400/15 dark:text-rose-300 dark:ring-rose-400/30',
-  'bg-violet-500/10 text-violet-700 ring-violet-500/25 dark:bg-violet-400/15 dark:text-violet-300 dark:ring-violet-400/30',
-  'bg-sky-500/10 text-sky-700 ring-sky-500/25 dark:bg-sky-400/15 dark:text-sky-300 dark:ring-sky-400/30',
-  'bg-teal-500/10 text-teal-700 ring-teal-500/25 dark:bg-teal-400/15 dark:text-teal-300 dark:ring-teal-400/30',
-]
-
-/** 对用户名做稳定哈希后取色（djb2 变体，与 vendorTone 同一思路） */
-function usernameTone(name: string): string {
-  let hash = 5381
-  for (let index = 0; index < name.length; index += 1) {
-    hash = (hash * 33 + name.charCodeAt(index)) % 1_000_003
-  }
-  return AVATAR_TONES[hash % AVATAR_TONES.length]
-}
+import { identityTone } from '@/utils/vendor'
 
 /** 头像首字符（用户名首字符大写；空名回退 #） */
 function usernameInitial(name: string): string {
@@ -77,7 +57,7 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntry; highlig
   return (
     <tr
       className={`border-b border-line/70 transition last:border-0 ${
-        highlight ? 'bg-brand/10 font-medium text-ink' : 'hover:bg-surface/40 text-ink-2'
+        highlight ? 'bg-brand/10 font-medium text-ink' : 'hover:bg-layer text-ink-2'
       }`}
     >
       {/* 名次 */}
@@ -87,7 +67,7 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntry; highlig
             className={`inline-flex h-6 w-6 items-center justify-center rounded text-xs font-semibold tabular-nums ${
               entry.rank <= 3
                 ? 'bg-brand/15 text-brand'
-                : 'bg-ink/5 text-ink-3'
+                : 'bg-layer text-ink-3'
             }`}
           >
             {entry.rank}
@@ -101,7 +81,7 @@ function LeaderboardRow({ entry, highlight }: { entry: LeaderboardEntry; highlig
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-2.5">
           <span
-            className={`inline-flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ring-1 ${usernameTone(
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ring-1 ${identityTone(
               entry.username,
             )}`}
           >

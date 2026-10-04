@@ -377,7 +377,7 @@ function BroadcastWizardModal({
                         className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition ${
                           active
                             ? 'border-brand bg-brand/5'
-                            : 'border-line bg-card hover:border-line-2 hover:bg-surface/50'
+                            : 'border-line bg-card hover:border-line-2 hover:bg-layer'
                         }`}
                       >
                         <span

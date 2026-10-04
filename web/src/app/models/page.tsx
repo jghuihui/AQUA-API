@@ -209,7 +209,7 @@ function ModelRow({ model, viewer, onOpen }: { model: PlazaModel; viewer?: Plaza
   const { quotaPerYuan } = useSite()
   const price = model.prices?.[0]
   return (
-    <tr className="cursor-pointer bg-card transition hover:bg-surface/60" onClick={onOpen}>
+    <tr className="cursor-pointer bg-card transition-colors duration-150 ease-fluent hover:bg-layer" onClick={onOpen}>
       <td className="px-4 py-2.5">
         <div className="flex items-center gap-2">
           <span className="font-mono text-ink">{model.model}</span>

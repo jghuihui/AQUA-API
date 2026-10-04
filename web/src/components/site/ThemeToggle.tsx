@@ -63,8 +63,9 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] text-ink-2 transition hover:bg-ink/5 hover:text-ink"
+        className="fluent-focus flex items-center gap-1 rounded-sm px-2 py-1.5 text-[13px] text-ink-2 transition duration-150 ease-fluent hover:bg-layer hover:text-ink"
         aria-label="切换昼夜主题"
+        aria-expanded={open}
         title="切换主题"
       >
         <AppIcon name={currentIcon} size={15} />
@@ -72,7 +73,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-56 overflow-hidden rounded-md border border-line bg-card py-1 shadow-pop">
+        <div className="fluent-dialog-in absolute right-0 z-30 mt-1 w-56 overflow-hidden rounded-lg border border-line bg-card py-1 shadow-pop">
           {OPTIONS.map((opt) => (
             <button
               key={opt.value}
@@ -81,13 +82,22 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
                 setMode(opt.value)
                 setOpen(false)
               }}
-              className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition hover:bg-surface ${
-                opt.value === mode ? 'text-brand' : 'text-ink-2'
+              // 选项用 bg-layer 悬停而不是 bg-surface：surface 在暗色主题下比卡片更暗，
+              // 悬停会像"在菜单上挖了个洞"。
+              className={`relative flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors duration-150 ease-fluent hover:bg-layer ${
+                opt.value === mode ? 'font-medium text-ink' : 'text-ink-2'
               }`}
             >
-              <AppIcon name={opt.icon} size={15} />
+              {/* 选中项用左侧强调条，与侧栏导航的选中语言保持一致 */}
+              <span
+                aria-hidden="true"
+                className={`absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-brand transition-opacity ${
+                  opt.value === mode ? 'opacity-100' : 'opacity-0'
+                }`}
+              />
+              <AppIcon name={opt.icon} size={15} className={opt.value === mode ? 'text-brand' : undefined} />
               <span className="flex-1">{opt.label}</span>
-              {opt.value === mode && <AppIcon name="check" size={14} />}
+              {opt.value === mode && <AppIcon name="check" size={14} className="text-brand" />}
             </button>
           ))}
 

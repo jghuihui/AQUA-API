@@ -1,8 +1,16 @@
-/** 展示类基础组件：Card / Badge / StatCard / Skeleton / EmptyState / CodeBlock / Tabs。
+/** 展示类基础组件：Card / Badge / StatCard / Skeleton / EmptyState / CodeBlock / Tabs / PageHeader。
  *
  * 意图（Why）：
  *   后台与门户的「信息展示」高度复用这些基础件；集中定义保证视觉重复性与一致性，
  *   避免每个页面各自拼样式类。
+ *
+ * Fluent 化要点：
+ *   - 容器圆角 8px（比 4px 的控件更圆），层次靠「两层软影」--shadow-flat 表达，
+ *     而不是靠加重描边；
+ *   - 悬停反馈一律用半透明叠加层（bg-layer / bg-layer-2）而不是实色底：
+ *     实色底在暗色主题下会与卡片撞色甚至反向（悬停后"更黑"）；
+ *   - Tabs 从「分段胶囊」改为「下划线指示条」—— 分段胶囊是 iOS/web 语汇，
+ *     Fluent 的分区切换（Pivot）是贴底边的 2px 指示条。
  */
 'use client'
 
@@ -17,12 +25,25 @@ interface CardProps {
   className?: string
   /** 内部纵向间距（默认 p-5，紧凑场景用 p-4） */
   padding?: 'md' | 'lg' | 'none'
+  /**
+   * 可点击 / 可选中的卡片：悬停时描边高亮并加深投影。
+   *
+   * 为什么默认关闭：静态展示卡上加悬停反馈等于给出一个「这里能点」的承诺，
+   * 而用户点了没反应。只有真的绑了 onClick / href 的卡才该传 true。
+   */
+  interactive?: boolean
 }
 
-export function Card({ children, className, padding = 'md' }: CardProps) {
+export function Card({ children, className, padding = 'md', interactive }: CardProps) {
   const pad = padding === 'lg' ? 'p-6' : padding === 'none' ? 'p-0' : 'p-5'
   return (
-    <div className={`rounded-lg border border-line bg-card ${pad} ${className ?? ''}`}>
+    <div
+      className={`rounded-lg border border-line bg-card shadow-flat ${pad} ${
+        interactive
+          ? 'cursor-pointer transition-[border-color,box-shadow] duration-150 ease-fluent hover:border-line-2 hover:shadow-pop'
+          : ''
+      } ${className ?? ''}`}
+    >
       {children}
     </div>
   )
@@ -38,11 +59,11 @@ export function Badge({ tone = 'off', children }: { tone?: BadgeTone; children: 
     warn: 'bg-warn/10 text-warn border-warn/25',
     err: 'bg-err/10 text-err border-err/25',
     info: 'bg-info/10 text-info border-info/25',
-    off: 'bg-ink/5 text-ink-2 border-ink/10',
+    off: 'bg-layer-2 text-ink-2 border-line-2',
     brand: 'bg-brand/10 text-brand border-brand/25',
   }
   return (
-    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${toneClass[tone]}`}>
+    <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-xs ${toneClass[tone]}`}>
       {children}
     </span>
   )
@@ -64,7 +85,7 @@ export function StatCard({ label, value, hint, extra }: StatCardProps) {
   // 按字符数降一档字号并允许折行，保证任何量级都不溢出。
   const compact = value.length > 10
   return (
-    <div className="rounded-lg border border-line bg-card p-5">
+    <div className="rounded-lg border border-line bg-card p-5 shadow-flat">
       <div className="text-[13px] text-ink-3">{label}</div>
       <div
         className={`mt-1.5 font-semibold tracking-tight text-ink tabular-nums ${
@@ -82,7 +103,7 @@ export function StatCard({ label, value, hint, extra }: StatCardProps) {
 /* ── Skeleton：数据加载占位 ─────────────────────────────── */
 
 export function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-ink/8 ${className}`} />
+  return <div className={`animate-pulse rounded-sm bg-layer-2 ${className}`} />
 }
 
 export function SkeletonRows({ rows = 3 }: { rows?: number }) {
@@ -136,7 +157,7 @@ export function CodeBlock({ code, language, title }: CodeBlockProps) {
   return (
     // 代码块用专用 code-bg/code-fg 令牌：两套主题下都保持深底浅字，
     // 不复用 ink/surface（它们在暗色下会互换，导致代码块反相成浅底深字）。
-    <div className="overflow-hidden rounded-lg border border-line bg-code-bg text-code-fg">
+    <div className="overflow-hidden rounded-lg border border-line bg-code-bg text-code-fg shadow-flat">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-xs">
         <span className="text-white/60">{title || language || 'code'}</span>
         <button type="button" onClick={handleCopy} className="flex items-center gap-1 text-white/60 hover:text-white">
@@ -148,7 +169,7 @@ export function CodeBlock({ code, language, title }: CodeBlockProps) {
   )
 }
 
-/* ── Tabs：分段式切换（用于广场分组 / 设置分区） ─────────── */
+/* ── Tabs：下划线式分区切换（用于广场分组 / 设置分区） ────── */
 
 interface TabItem<T extends string> {
   value: T
@@ -164,7 +185,7 @@ interface TabsProps<T extends string> {
 
 export function Tabs<T extends string>({ items, value, onChange }: TabsProps<T>) {
   return (
-    <div className="flex flex-wrap gap-1 rounded-lg border border-line bg-surface p-1" role="tablist">
+    <div className="flex flex-wrap items-stretch gap-1 border-b border-line" role="tablist">
       {items.map((item) => {
         const active = item.value === value
         return (
@@ -174,22 +195,34 @@ export function Tabs<T extends string>({ items, value, onChange }: TabsProps<T>)
             role="tab"
             aria-selected={active}
             onClick={() => onChange(item.value)}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] transition ${
-              active ? 'bg-card text-ink shadow-sm border border-line-2' : 'text-ink-3 hover:text-ink-2'
-            }`}
+            className={`fluent-focus relative -mb-px flex items-center gap-1.5 px-3 pt-2 pb-2.5 text-[13px]
+              transition-colors duration-150 ease-fluent
+              ${active ? 'font-medium text-ink' : 'text-ink-3 hover:bg-layer hover:text-ink-2'}`}
           >
             {item.label}
             {item.count !== undefined && (
-              <span className={`rounded bg-ink/5 px-1.5 text-xs ${active ? 'text-brand' : 'text-ink-3'}`}>
+              <span
+                className={`rounded-sm px-1.5 text-xs tabular-nums ${
+                  active ? 'bg-brand/12 text-brand' : 'bg-layer-2 text-ink-3'
+                }`}
+              >
                 {item.count}
               </span>
             )}
+            {/* 指示条压在容器底边上，形成「这一项在轨道上」的读感 */}
+            <span
+              aria-hidden="true"
+              className={`absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-opacity duration-150 ${
+                active ? 'bg-brand opacity-100' : 'opacity-0'
+              }`}
+            />
           </button>
         )
       })}
     </div>
   )
 }
+
 /* ── PageHeader：页面标题区 ────────────────────────────── */
 
 /**
@@ -222,7 +255,9 @@ export function PageHeader({ title, desc, actions }: PageHeaderProps) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-xl font-bold text-ink">{title}</h1>
+        {/* semibold 而不是 bold：Fluent 的标题字重是 Semibold，
+            用 bold 会让标题比系统原生"更吵"，在密集后台里尤其明显。 */}
+        <h1 className="text-xl font-semibold text-ink">{title}</h1>
         {desc ? <p className="mt-0.5 text-[13px] text-ink-3">{desc}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

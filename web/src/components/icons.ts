@@ -70,6 +70,7 @@ export type IconName =
   | 'gauge'
   | 'swap'
   | 'ticket'
+  | 'panel-left'
 
 /** 图标路径表：24×24 视口下的描边路径（原创几何线条，无第三方图标依赖） */
 export const ICON_PATHS: Record<IconName, string[]> = {
@@ -268,4 +269,13 @@ export const ICON_PATHS: Record<IconName, string[]> = {
     'M12 11.5v1.8',
     'M12 15.4v1.8',
   ],
+  /**
+   * panel-left：侧栏面板（用于"展开/收起导航栏"）。
+   *
+   * 为什么不用 menu（三条横线）：menu 在移动端已经是"打开抽屉"的意思。
+   * 同一个图标在桌面端表示"收起侧栏"、在移动端表示"打开抽屉"，
+   * 会让用户以为两者是同一个动作。panel-left 画的是"带左栏的窗口"，
+   * 语义与它实际控制的东西一致。
+   */
+  'panel-left': ['M4.6 4.6h14.8v14.8H4.6z', 'M9.6 4.6v14.8'],
 }

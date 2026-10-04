@@ -3,6 +3,13 @@
  * 意图（Why）：
  *   后台大量「新建/编辑/删除确认」交互集中于此。统一遮罩、滚动锁定、
  *   无关键操作丢失；焦点管理保持基本可访问性（Esc 关闭、返回值确认）。
+ *
+ * Fluent 化要点：
+ *   - 遮罩在两套主题下都必须是【黑色】烟幕（Fluent Smoke 恒为黑）；
+ *     用 bg-ink 这种主题感知色会变成"暗色模式下盖一层白纱"，越遮越亮；
+ *   - 进场是「1.06 → 1 + 淡入」而不是「0.95 → 1 放大」：
+ *     前者读起来像是"压在纸面上落下来"，后者像是"从中心长出来"；
+ *   - 容器圆角 8px + 两层软影 shadow-pop，不用加重描边表达层次。
  */
 'use client'
 
@@ -43,21 +50,25 @@ export function Modal({ open, onClose, title, width = 560, children, footer }: M
 
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto p-4 pt-[8vh]">
-      {/* 遮罩：点击关闭 */}
-      <div className="fixed inset-0 bg-ink/40 backdrop-blur-[2px]" onClick={onClose} aria-hidden="true" />
+      {/* 遮罩：点击关闭。恒用黑色 —— 暗色主题下 bg-ink 是白色，会反向变亮。 */}
+      <div
+        className="fluent-fade-in fixed inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
         style={{ width }}
-        className="relative flex max-w-full flex-col rounded-lg border border-line bg-card shadow-pop"
+        className="fluent-dialog-in relative flex max-w-full flex-col rounded-lg border border-line bg-card shadow-pop"
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
-          <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
+          <h3 className="text-base font-semibold text-ink">{title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-ink-3 hover:bg-ink/5 hover:text-ink"
+            className="fluent-focus rounded-sm p-1 text-ink-3 transition duration-150 ease-fluent hover:bg-layer hover:text-ink"
             aria-label={t('components.modal.close')}
           >
             <AppIcon name="close" size={18} />
@@ -140,7 +151,7 @@ export function CopyButton({ text, label, className }: CopyButtonProps) {
     <button
       type="button"
       onClick={handleCopy}
-      className={`inline-flex items-center gap-1 text-[13px] text-ink-3 transition hover:text-brand ${className ?? ''}`}
+      className={`fluent-focus inline-flex items-center gap-1 rounded-sm text-[13px] text-ink-3 transition duration-150 ease-fluent hover:text-brand ${className ?? ''}`}
     >
       <AppIcon name={copied ? 'check' : 'copy'} size={14} />
       {/* 复制成功后回落到 label：原写法是 {copied ? '已复制' : label}，
