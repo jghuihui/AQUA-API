@@ -90,6 +90,19 @@ type AskRequest struct {
 	OnDelta func(text string)
 	// OnToolCall 在执行每个工具前调用（用于向前端展示"正在查什么"）。
 	OnToolCall func(name string, mutating bool)
+
+	// Confirmed 是本次对话已获站长确认的写操作。
+	//
+	// 一次对话只允许一个待确认操作：模型在等确认时无法继续推进，
+	// 所以它不可能在同一轮里发起第二个需要确认的工具。
+	// 单个槽位足够。
+	Confirmed *ConfirmedCall
+
+	// OnConfirmRequired 在工具需要站长确认时调用。
+	//
+	// 为 nil 时需要确认的工具一律【拒绝执行】并把原因回填给模型 ——
+	// 绝不能因为"没人来确认"就默认放行，那会让确认机制形同虚设。
+	OnConfirmRequired func(req ConfirmationRequest)
 }
 
 // AskResult 是一次对话的结果。
@@ -107,6 +120,20 @@ type AskResult struct {
 	// PromptTokens / CompletionTokens 是累计用量。
 	PromptTokens     int
 	CompletionTokens int
+
+	// PendingConfirmation 非空表示本轮对话【停在等待站长确认】，
+	// 没有任何副作用已经发生。
+	//
+	// 为什么要单独一个字段而不是塞进 ToolCalls 的错误里：
+	// 调用方要据此决定"发弹窗"还是"发报错"，
+	// 而这两件事在 SSE 里是不同的消息类型。
+	// 塞进错误文本的话，server 层就得靠字符串匹配来分辨 ——
+	// 那种判定的表现是"提示词一改，弹窗就再也不出现了"。
+	//
+	// 【有它就一定没有执行】
+	//	这是硬保证：引擎在生成确认单之后立刻返回，
+	//	不会在站长点头之前碰任何写路径。
+	PendingConfirmation *ConfirmationRequest
 }
 
 // ExecutedTool 记录一次工具执行的结果。
@@ -142,6 +169,25 @@ type Engine struct {
 	tools *AgentTools
 	// now 可注入，便于测试超时刻意触发的情况。
 	now func() time.Time
+
+	// pendingConfirm 记录本次对话中【第一个】待确认的操作。
+	//
+	// 【为什么是 Engine 的字段而不是返回值一路往上传】
+	//	executeOne 是深埋在工具循环里的，它无法直接改外层的
+	//	AskResult（那是一次 Ask 独有的值，而 executeOne 的签名里没有它）。
+	//	而把确认单一路作为返回值传上去，需要把 executeOne 拆成
+	//	"执行"与"判定"两步，代码会明显变啰嗦。
+	//
+	// 【为什么用"第一个"而不是"最后一个"】
+	//	一个模型回复里可能带多个 tool_calls。若其中两个都要确认，
+	//	我们只能先问第一个 —— 站长确认后重新提问，届时模型会再次
+	//	提出它的全部调用，第二轮才会问到第二个。
+	//	覆盖式赋值会丢掉先前的确认单，导致站长看到的是第二个操作
+	//	而第一个被静默跳过，那比"慢一轮"危险得多。
+	//
+	//	每次 Ask 开头必须重置（见 Ask 内部），否则上一次对话的
+	//	待确认项会泄漏到下一次 —— 那表现为"刚问完就弹了个旧弹窗"。
+	pendingConfirm *ConfirmationRequest
 }
 
 // NewEngine 构造对话引擎。
@@ -157,8 +203,32 @@ func NewEngine(llm *LLMClient, tools *AgentTools) *Engine {
 	return e
 }
 
+// WithCaller 返回一个"本次对话用指定调用者"的引擎副本。
+//
+// 【为什么需要它，而不是把上游配置放进 AskRequest】
+//
+// Engine 是 sync.Once 缓存的（见 server/agent_wiring.go），而站长随时可以
+// 在后台改独立上游配置。若把配置读在 NewEngine 里，改完配置就得重启服务才生效——
+// "我明明保存了却没生效"是最难排查的一类问题。
+//
+// 但也不能塞进 AskRequest：那会让每次组装请求都多带一份与对话内容无关的字段，
+// 更糟的是它暗示"不同轮次可以换上游"，而实际上整个对话过程必须用同一个上游
+// （中途换上游会导致工具调用后模型换了、上下文对不上）。
+//
+// 所以做成"以某个调用者派生一个临时引擎"：原引擎不变（仍然可并发使用），
+// 本次对话用派生出来的那一个。
+func (e *Engine) WithCaller(llm *LLMClient) *Engine {
+	clone := *e
+	clone.llm = llm
+	return &clone
+}
+
 // Ask 执行一次完整对话（含工具循环）。
 func (e *Engine) Ask(ctx context.Context, req AskRequest) (*AskResult, error) {
+	// 每次对话开始前清掉上一次遗留的待确认项。
+	// 引擎是【共享】实例（server 侧 sync.Once 缓存），不清就会串味。
+	e.pendingConfirm = nil
+
 	if e.llm == nil {
 		return nil, errors.New("agent: 引擎未配置上游客户端")
 	}
@@ -218,8 +288,22 @@ func (e *Engine) Ask(ctx context.Context, req AskRequest) (*AskResult, error) {
 		messages = append(messages, assistantMsg)
 
 		for _, call := range resp.ToolCalls {
-			executed := e.executeOne(ctx, role, call, req.OnToolCall)
+			executed := e.executeOne(ctx, role, call, &req)
 			result.ToolCalls = append(result.ToolCalls, executed)
+
+			// 【发现待确认：立刻停止本轮】
+			//
+			// 继续循环等于把"尚未执行"当成"结果"回填给模型，
+			// 模型会据此编出"已经把用户封了"这种回答 ——
+			// 而实际上什么都没发生。那比停下来问更糟：
+			// 站长看到一句成功的汇报，却什么都没改。
+			if e.pendingConfirm != nil {
+				result.PendingConfirmation = e.pendingConfirm
+				result.Answer = "该操作需要你确认后才能执行，" +
+					"请在上方确认或取消；确认后我会继续处理其余步骤。"
+				return result, nil
+			}
+
 			// 每个工具结果都必须回填，且带 tool_call_id ——
 			// 缺了它模型无法把结果与请求对上（见 ChatMessage.ToolCallID 注释）。
 			messages = append(messages, ChatMessage{
@@ -271,7 +355,7 @@ func (e *Engine) executeOne(
 	ctx context.Context,
 	role model.AgentRole,
 	call ToolCall,
-	onToolCall func(string, bool),
+	ask *AskRequest,
 ) ExecutedTool {
 	rec := ExecutedTool{
 		Name:      call.Func.Name,
@@ -317,11 +401,46 @@ func (e *Engine) executeOne(
 		return rec
 	}
 	rec.Mutating = tool.Mutating
-	if onToolCall != nil {
-		onToolCall(tool.Name, tool.Mutating)
+	if ask != nil && ask.OnToolCall != nil {
+		ask.OnToolCall(tool.Name, tool.Mutating)
 	}
 
-	out, err := e.tools.Execute(ctx, role, tool.Name, args)
+	// 【确认优先于执行】
+	//
+	// 顺序不能颠倒：先执行再问等于已经改了，"确认"沦为形式。
+	// 因此这里在真正调用 Handler 之前先问一次。
+	//
+	// 为什么用"将要用的参数"而不是模型新解析的参数来生成确认单：
+	// 站长看到并点确认的就是那一份，之后执行的也必须是那一份。
+	// 中间任何一次重新解析都可能产生不同的值。
+	callArgs := args
+	if tool.Confirm == ConfirmAlways {
+		useArgs, blocked, err := e.resolveConfirmation(ctx, ask, tool, args)
+		if err != nil {
+			rec.OK = false
+			rec.Error = truncateText(err.Error(), 200)
+			rec.Result = toolErrorResult(err.Error())
+			return rec
+		}
+		if blocked {
+			// 已发出确认请求，等站长点击。本轮到此为止 ——
+			// 引擎不能在没有结果的情况下继续循环（它手里没有工具结果可回填）。
+			rec.OK = false
+			rec.Error = "等待站长确认"
+			rec.Result = toolErrorResult("该操作已提交给站长确认，确认后才会执行")
+			return rec
+		}
+		callArgs = useArgs
+	}
+
+	// ask 为 nil 只可能来自内部误用（Ask 总会传 &req），
+	// 但工具执行是本文件里唯一会改数据的地方，
+	// 在那里用一个可能 panic 的解引用把"内部 bug"变成"服务崩溃"不划算。
+	var confirmed *ConfirmedCall
+	if ask != nil {
+		confirmed = ask.Confirmed
+	}
+	out, err := e.tools.ExecuteConfirmed(ctx, role, tool.Name, callArgs, confirmed)
 	if err != nil {
 		rec.OK = false
 		// 错误文本同时回填给模型：让它能根据"渠道不存在，请先查列表"
@@ -341,6 +460,114 @@ func (e *Engine) executeOne(
 	rec.OK = true
 	rec.Result = truncateText(string(encoded), maxToolResultBytes)
 	return rec
+}
+
+// resolveConfirmation 决定一次需要确认的写操作是"生成确认单"还是"直接执行"。
+//
+// 三个返回值：
+//   - useArgs：真正要用于执行的参数（已确认时是被展示过的那一份）；
+//   - blocked：为 true 表示"已提交确认请求，请等站长"，本轮就此中断；
+//   - err：参数本身不合法（如引用了不存在的用户），连确认单都不该生成。
+//
+// 【为什么要在这里生成确认单，而不是让前端自己拼】
+//
+//	确认单要展示"现在是什么、会变成什么"，这必须读数据库。
+//	前端拿不到仓储，若让它自己拼，它就只能展示模型给的参数 ——
+//	而模型的参数正是待验证的东西。拿被验证者的说法当证据，
+//	确认单就毫无意义。
+//
+// 【为什么 blocked 时不把错误回填给模型继续循环】
+//
+//	模型手里没有"操作已完成"的结果，若继续问下去它只会反复重试同一个调用。
+//	正确做法是让本轮结束、前端弹窗；站长点确认后前端用新的一次
+//	请求（携带 Confirmed）重跑，那时模型才能拿到真实结果继续回答。
+func (e *Engine) resolveConfirmation(
+	ctx context.Context,
+	req *AskRequest,
+	tool Tool,
+	args json.RawMessage,
+) (useArgs json.RawMessage, blocked bool, err error) {
+	// 已确认：核对工具名一致后直接放行。
+	//
+	// 一致性校验不能省：前端可能把上一次响应的确认单带到这次请求里
+	// （期间站长又触发了别的工具），那会导致"确认 A 执行 B"。
+	if req.Confirmed != nil {
+		if req.Confirmed.ToolName != tool.Name {
+			return nil, false, fmt.Errorf(
+				"站长确认的是 %s，与本次要执行的 %s 不一致，请重新发起操作",
+				req.Confirmed.ToolName, tool.Name)
+		}
+		return req.Confirmed.Params, false, nil
+	}
+
+	// 没确认，且没人接收确认请求 → 拒绝执行。
+	//
+	// 这一分支是整个机制的地基：绝不能因为"没找到确认通道"
+	// 就当成"不需要确认"。那会让 OnConfirmRequired 未挂载的部署
+	// （例如自建二进制的旧配置）静默获得无限制的写权限。
+	if req.OnConfirmRequired == nil {
+		return nil, false, fmt.Errorf(
+			"%s 需要站长确认，但本次请求没有确认通道，已拒绝执行", tool.Name)
+	}
+
+	confirmReq, err := e.buildConfirmation(ctx, req, tool, args)
+	if err != nil {
+		return nil, false, err
+	}
+	// 记到引擎上供主循环检测。
+	// 只记第一个：见 Engine.pendingConfirm 的注释（一次只问一个，
+	// 否则模型一次请求里两个待确认操作会互相覆盖）。
+	if e.pendingConfirm == nil {
+		e.pendingConfirm = confirmReq
+	}
+	req.OnConfirmRequired(*confirmReq)
+	return nil, true, nil
+}
+
+// buildConfirmation 生成确认单。
+//
+// 刻意【不】在这里执行任何写操作：确认单生成阶段只读。
+// 这是"确认之前绝不能动数据"的实现方式 ——
+// 生成确认单与执行确认是两个不同的函数，物理上不可能重叠。
+func (e *Engine) buildConfirmation(
+	ctx context.Context,
+	req *AskRequest,
+	tool Tool,
+	args json.RawMessage,
+) (*ConfirmationRequest, error) {
+	confirmReq := &ConfirmationRequest{
+		ToolName: tool.Name,
+		Title:    tool.ConfirmTitle,
+		// Params 原样回传：前端必须原样送回，不能解析也不能改。
+		Params: args,
+	}
+	if confirmReq.Title == "" {
+		confirmReq.Title = "确认执行该操作"
+	}
+	confirmReq.RiskNote = tool.ConfirmRiskNote
+
+	// 让工具自己补充"改什么"的明细。
+	//
+	// 之所以不把明细硬编码在引擎里：各工具要读的当前值完全不同
+	// （用户额度、令牌状态、渠道权重），只有工具自己知道该查哪张表。
+	// 引擎若去猜，就得维护一张"工具名 → 该读哪个仓储"的表 ——
+	// 那张表一旦与工具不同步，确认单就会显示错的旧值，
+	// 而站长恰恰靠它做判断。
+	if tool.SummarizeChange == nil {
+		// 没有 SummarizeChange 的工具【不该】配 ConfirmAlways：
+		// 那样站长只能看到"确认执行某个操作"而不知道到底改什么，
+		// 那样的确认单是有害的 —— 它会训练站长盲点"确认"。
+		// 因此这里直接拒绝，而不是发一张空确认单。
+		return nil, fmt.Errorf(
+			"工具 %s 未提供确认信息（SummarizeChange 为 nil），"+
+				"无法安全地请求确认，已拒绝执行", tool.Name)
+	}
+	summary, err := tool.SummarizeChange(ctx, e.tools, args)
+	if err != nil {
+		return nil, fmt.Errorf("无法生成该操作的确认信息：%w", err)
+	}
+	confirmReq.Summary = summary
+	return confirmReq, nil
 }
 
 // findTool 在该角色的白名单里找工具。

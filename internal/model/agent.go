@@ -71,6 +71,22 @@ const (
 	// 一旦它能读到站内数据，提示注入就能把数据套出来。
 	// 「问问题」这件事本身不需要查数据库的能力。
 	AgentRoleSupport AgentRole = "support"
+
+	// AgentRoleSelfService 门户自助 agent：登录用户问的客服，带自助工具。
+	//
+	// 它与 support 的区别是【拿的是会话身份而不是密钥】：
+	// support 在公网用 ak- 密钥，无法确定"你是谁"，因此零工具；
+	// 本角色跑在 portal（已挂 SessionAuth）之下，ctx 里一定有 userID，
+	// 所以可以安全地提供"查我的订单/余额/令牌"这类自助工具。
+	//
+	// 【关键约束：它不是一种可分配的 agent key 角色】
+	// ValidateAgentKeyRole 刻意【不】接受这个值 ——
+	// 一旦允许用密钥选这个角色，站长就能把一把 ak- 密钥标成自助，
+	// 那把密钥就会在公网拿到"查我的账户"工具。
+	// 而密钥背后没有 userID，工具会因取不到身份而全部失败；
+	// 更糟的是"零工具 vs 报错工具"的差异会被误判为鉴权漏洞。
+	// 因此它在设计上就【只能】由门户的会话路由赋予。
+	AgentRoleSelfService AgentRole = "self_service"
 )
 
 // 密钥状态（与 Token/用户状态保持同一套语义，便于后台统一渲染徽标）。
@@ -107,10 +123,20 @@ func HashAgentKey(plain string) string {
 //
 // 不给"未知角色按 ops 处理"的兜底：角色决定工具授权，
 // 一个拼错的角色若被默认成 ops，就等于给了一个带工具的公网入口。
+//
+// 【刻意不接受 AgentRoleSelfService】
+//
+//	该角色需要 ctx 里有登录用户身份，这只有门户会话路由能提供。
+//	若允许把它分配给 agent key，那把密钥在公网就会尝试执行自助工具，
+//	而它取不到 userID —— 结果是"有工具但全部报错"，
+//	这种状态会被误判成鉴权故障，也会让审计时难以判断一把密钥的真实能力。
+//	正确的做法是从【源头】不允许创建这种密钥。
 func ValidateAgentKeyRole(role AgentRole) error {
 	switch role {
 	case AgentRoleOps, AgentRoleSupport:
 		return nil
+	case AgentRoleSelfService:
+		return fmt.Errorf("agent 角色 %q 不能用于访问密钥：它仅供站内登录用户的自助客服使用", string(role))
 	default:
 		return fmt.Errorf("agent 角色非法: %q", string(role))
 	}

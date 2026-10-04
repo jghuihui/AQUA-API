@@ -121,9 +121,9 @@ func TestAsk_纯文字回答一轮结束(t *testing.T) {
 // TestAsk_工具循环调一次并回填 验证"调工具→回填→再问"的完整链路。
 //
 // 这条是整个 agent 的核心路径，断言三件事：
-//   1) 工具被执行（ToolCalls 有记录）；
-//   2) 第二次请求里带上了 assistant(tool_calls) 与 tool 结果；
-//   3) 最终答复是第二轮的文字。
+//  1. 工具被执行（ToolCalls 有记录）；
+//  2. 第二次请求里带上了 assistant(tool_calls) 与 tool 结果；
+//  3. 最终答复是第二轮的文字。
 func TestAsk_工具循环调一次并回填(t *testing.T) {
 	deps := &AgentTools{Channels: &fakeChannelRepo{
 		channels: []*model.Channel{{ID: 1, Name: "主渠道", Status: model.ChannelStatusEnabled}},

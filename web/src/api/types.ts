@@ -31,6 +31,14 @@ export interface ApiErrorBody {
     message: string
     type?: string
     code?: string
+    /**
+     * 出错的字段名（后端字段级校验失败时下发）。
+     *
+     * 为什么需要它：一次提交带十几个参数时，
+     * 只说"某个参数填错了"的笼统提示等于让站长逐个试。
+     * 有了字段名，表单能把红框直接标在那个输入框上。
+     */
+    field?: string
   }
 }
 

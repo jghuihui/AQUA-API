@@ -66,6 +66,68 @@ export interface AgentSettingsInput {
   history_enabled?: boolean
 }
 
+// ── 独立上游 ────────────────────────────────────────────────────
+
+/** 独立上游的协议类型 */
+export type AgentEndpointKind = 'openai' | 'anthropic'
+
+/** 协议类型下拉框的一项（由服务端下发，前端不硬编码） */
+export interface AgentEndpointKindOption {
+  value: AgentEndpointKind
+  label: string
+}
+
+/**
+ * agent 的独立上游配置。
+ *
+ * 与 AgentSettings 的分工：那一项管"用什么模型、说什么话"（行为约定），
+ * 这一项管"往哪发请求、用哪把凭据"（连接信息）。
+ * 分开是因为两者会各自独立变化：换个便宜的模型不该动地址，
+ * 换地址也不该顺手把提示词重置。
+ */
+export interface AgentEndpoint {
+  /** 上游地址，如 https://api.example.com/v1 */
+  base_url: string
+  /**
+   * 库里是否已配置密钥。
+   *
+   * 响应里**永远没有** api_key 字段（明文与密文都不下发）。
+   * 界面据此显示"已配置，留空表示不修改"，
+   * 而用户想换密钥时直接覆盖输入框即可。
+   */
+  api_key_set: boolean
+  /** 独立上游的模型名；留空表示沿用「运行配置」里的模型 */
+  model: string
+  /** 协议类型 */
+  kind: AgentEndpointKind
+  /** 协议类型下拉框选项 */
+  kind_options: AgentEndpointKindOption[]
+  /** 是否启用独立上游（关掉 = 借用站点渠道） */
+  enabled: boolean
+  /**
+   * 地址与密钥是否【成对齐全】。
+   *
+   * 由服务端判定：前端算不出"密钥没回显"是"从未配置"还是"已配置未修改"，
+   * 两者只有服务端分得清。
+   */
+  configured: boolean
+}
+
+/** 独立上游配置保存请求；未传的项在服务端保持原值 */
+export interface AgentEndpointInput {
+  base_url?: string
+  /**
+   * API Key。
+   *
+   * 留空（甚至不传）表示沿用原值——不是清除。
+   * 想彻底清掉只能关掉 enabled，那会退回借用渠道。
+   */
+  api_key?: string
+  model?: string
+  kind?: AgentEndpointKind
+  enabled?: boolean
+}
+
 // ── 密钥 ────────────────────────────────────────────────────────
 
 /** 密钥角色 */
@@ -123,6 +185,13 @@ export interface AgentChatInput {
   /** 历史（不含本轮）。服务端会丢弃其中的 system / tool 消息 */
   history?: AgentChatTurn[]
   /**
+   * 已获确认的写操作凭证（仅运维入口生效）。
+   *
+   * 用户点确认后，把它连同**同一句问题**再发一次，
+   * 服务端才会真正执行那个被展示过的操作。
+   */
+  confirm?: { tool_name: string; params: Record<string, unknown> }
+  /**
    * 指定模型。
    *
    * 【仅运维入口生效】客服入口会忽略它——否则外部人就能指定一个
@@ -166,9 +235,30 @@ export interface AgentAskResult {
  *   done  → 收尾，替换为完整答案
  *   error → 出错，展示可重试提示
  */
+/**
+ * 待确认的写操作（服务端判定"这个操作要先问站长"时下发）。
+ *
+ * 【params 必须原样回传，不能解析也不能改】
+ * 那是服务端展示给站长看过的那一份参数。
+ * 前端若重新组装，就可能出现"弹窗显示封禁 3 号、执行时传了 5 号"——
+ * 而站长恰恰是靠弹窗内容做判断的。
+ */
+export interface AgentConfirmRequest {
+  tool_name: string
+  title: string
+  /** 逐条列出"现在是什么、会变成什么" */
+  summary: { label: string; value: string; after?: string }[]
+  /** 一句风险提示 */
+  risk_note: string
+  /** 被展示过的那份参数，确认时原样送回 */
+  params: Record<string, unknown>
+}
+
 export type AgentStreamEvent =
   | { type: 'delta'; text: string }
   | { type: 'tool'; tool: { name: string; mutating: boolean } }
+  /** 待确认：不是失败，是"等你点头"。前端据此弹窗而非显示报错 */
+  | { type: 'confirm'; confirm: AgentConfirmRequest }
   | { type: 'done'; result: AgentAskResult }
   | { type: 'error'; message: string }
   | { type: 'end' }
@@ -185,6 +275,28 @@ export async function saveAgentSettings(
   input: AgentSettingsInput,
 ): Promise<AgentSettings> {
   return api.put<AgentSettings>('/admin/agent/settings', input)
+}
+
+/**
+ * 读取 agent 的独立上游配置。
+ *
+ * 响应永远不含 API Key（明文与密文都不下发），只有 api_key_set。
+ * 界面据此显示"已配置，留空表示不修改"。
+ */
+export async function fetchAgentEndpoint(): Promise<AgentEndpoint> {
+  return api.get<AgentEndpoint>('/admin/agent/endpoint')
+}
+
+/**
+ * 保存 agent 的独立上游配置。
+ *
+ * 返回的是【保存后回读】的结果而非提交值：服务端会回读，
+ * 因此这里拿到的 configured / api_key_set 是真实落库的状态。
+ */
+export async function saveAgentEndpoint(
+  input: AgentEndpointInput,
+): Promise<AgentEndpoint> {
+  return api.put<AgentEndpoint>('/admin/agent/endpoint', input)
 }
 
 /** 列出 agent 密钥 */

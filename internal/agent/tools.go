@@ -79,6 +79,47 @@ type Tool struct {
 	// ② 将来若加"只读运维 agent"角色，可按此跳过全部写操作。
 	// 漏标一个写操作的后果是"站长以为客服是只读的，它却改了渠道状态"。
 	Mutating bool
+
+	// Confirm 是该工具的写操作确认策略（见 confirm.go）。
+	//
+	// 【为什么不靠 Mutating 推导】Mutating 只回答"是不是写操作"，
+	// 答不了"要不要先问站长"。而后者才是权限扩容后的关键问题：
+	// 改权重与封用户都是写操作，前者该直接做、后者必须先确认。
+	// 混在一个布尔里就没法表达这层差别。
+	//
+	// 【为什么不让模型决定】模型判断会不稳定（同样的操作不同对话里
+	// 判定不同），而且漏判的代价是站长眼前的误伤。
+	// 把它变成工具的静态属性后，模型看不到也改不了这个判定。
+	Confirm ConfirmPolicy
+
+	// ConfirmTitle 与 ConfirmRiskNote 是高危工具的展示文案。
+	//
+	// 写死在代码里而不是让工具调用时传：它们要出现在【站长看的那张确认单】上，
+	// 而确认单不能由提议操作的一方来措辞 —— 那等于让被告写判决词。
+	ConfirmTitle    string
+	ConfirmRiskNote string
+
+	// SummarizeChange 生成确认单上"改什么"的明细（读当前值，与改前改后对比）。
+	//
+	// 【为什么必须由工具自己提供，而不是引擎统一生成】
+	//	引擎要知道"改前是什么"就得去读对应的表，而各工具的目标表完全不同
+	//	（用户额度、令牌状态、渠道权重）。让引擎去猜就得维护一张
+	//	"工具名 → 该读哪个仓储"的映射表，那张表一旦与工具不同步，
+	//	确认单就会显示错误的旧值 —— 而站长恰恰是靠它做判断的。
+	//	错显示一次"改前 100 元"，就可能换来一次真实的误操作。
+	//
+	// 只读方法，绝不写库 —— 这保证了"生成确认单"与"执行确认"物理隔离。
+	// 为 nil 时确认单只显示工具名与风险提示（不给明细），
+	// 那比给错明细安全，但站长会失去判断依据，
+	// 因此每个 ConfirmAlways 的工具都必须实现它。
+	// ctx 是调用方的上下文：站长关掉页面时它会被取消，
+	// 确认单生成阶段同样要尊重它 —— 否则一次已放弃的确认请求
+	// 仍会继续查库，而在移动网络下那可能持续好几秒。
+	SummarizeChange func(
+		ctx context.Context,
+		deps *AgentTools,
+		args json.RawMessage,
+	) ([]ConfirmationItem, error)
 }
 
 // AgentTools 是执行工具所需的依赖集合。
@@ -92,6 +133,22 @@ type AgentTools struct {
 	Users     model.UserRepository
 	Orders    model.PaymentOrderRepository
 	Settings  model.SettingRepository
+
+	// Tokens 是令牌仓储。用于令牌管理类工具（列出/启停/改额度）。
+	//
+	// 刻意与 ChannelKeys 分开：两者都是"凭据"，但令牌能【直接调模型接口】，
+	// 泄露后果比渠道密钥更重。把它们放在相邻的两个字段而不是一个
+	// "凭据"抽象里，是为了让"谁动了凭据"在代码上一目了然。
+	Tokens      model.TokenRepository
+	ChannelKeys model.ChannelKeyRepository
+
+	// Announcements 与 SensitiveWords 用于站点运营类工具（发公告、管敏感词）。
+	//
+	// 与上面两个"凭据"仓储并列而不是收进某个"运营"分组：
+	// 公告与敏感词是内容审核面的数据，泄露后果与凭据不同
+	// （误伤用户对话 / 提前泄露维护公告），混在一组里会让人不再逐个审视。
+	Announcements  model.AnnouncementRepository
+	SensitiveWords model.SensitiveWordRepository
 
 	// Now 可注入，便于测试"最近 24 小时"这类相对时间查询。
 	// 为 nil 时用 time.Now。
@@ -118,14 +175,42 @@ var (
 // 这是**授权的唯一判定点**。执行路径（Execute）也走它，
 // 因此"下发给模型的工具"与"能执行的工具"永远一致——
 // 分成两处判的话，改了一处忘了另一处就是越权。
+// ToolsForRole 返回该角色可用的工具集。
+//
+// 这是【整个 agent 授权体系的唯一决策点】。
+// 无论请求从哪个入口进来、用什么鉴权方式，
+// 最终调用哪个工具集合都由这里的 role 分支决定。
+//
+// 三条不可动摇的规则：
+//
+//  1. 未知角色返回 nil 而非兜底到某个角色。
+//     拼错的角色若被默认成 ops，等于凭空开出一个带工具的入口。
+//
+//  2. 每个 case 的工具集必须与它的鉴权方式匹配。
+//     ops 要求管理员会话（见 router 的 admin 组）；
+//     self_service 要求 ctx 里有登录用户（见 tools_selfservice.go）；
+//     support 在公网用密钥，无法确定身份，因此零工具。
+//
+//  3. 加角色时必须在下面加一个独立 case，
+//     并在这里的注释里写清"它拿什么身份进来"。只写工具不给身份来源，
+//     是这类系统最常见也最危险的一种含糊。
 func ToolsForRole(role model.AgentRole, deps *AgentTools) []Tool {
 	if deps == nil {
 		return nil
 	}
 	switch role {
 	case model.AgentRoleOps:
+		// 身份来源：管理员会话（RequireAdmin）。
+		// 工具里包含改状态/改额度/删渠道等写操作，
+		// 因此额外受 UAC 提权约束（见 elevation.go）。
 		return opsTools(deps)
+	case model.AgentRoleSelfService:
+		// 身份来源：登录用户的会话，经 WithSelfUser 写入 ctx。
+		// 工具集刻意只有"读自己的"与"创建自己的 key"，
+		// 且没有任何一个工具接受 user_id 参数 —— 越权在签名上不可表达。
+		return selfServiceTools(deps)
 	case model.AgentRoleSupport:
+		// 身份来源：一把 agent 密钥，没有对应的站内用户。
 		// 刻意为空：客服不碰站内数据。
 		// 这不是"以后再说"，而是安全边界——加了它就得重新评估提示注入风险。
 		return nil
@@ -139,6 +224,27 @@ func ToolsForRole(role model.AgentRole, deps *AgentTools) []Tool {
 // role 决定可用工具集：support 拿到空列表，因此对它而言任何调用都返回
 // ErrNoTools——这是"客服碰不到站内数据"的唯一保证点。
 func (t *AgentTools) Execute(ctx context.Context, role model.AgentRole, name string, args json.RawMessage) (any, error) {
+	return t.ExecuteConfirmed(ctx, role, name, args, nil)
+}
+
+// ExecuteConfirmed 是带确认信息的执行入口。
+//
+// 【为什么不需要确认时仍走同一个函数】
+//
+//	绝大多数工具是 ConfirmNone，理论上可以保留两个函数各走各的。
+//
+// 但那样"执行写操作"就有两条路径，将来加确认逻辑时很容易只改一条，
+// 于是某个工具悄悄绕过了确认。单一入口从结构上排除这种可能。
+//
+// confirmed 为 nil 表示"尚未获得站长确认"。此时 ConfirmAlways 的工具
+// 会返回 ErrConfirmRequired（见 confirm.go），server 据此发确认事件。
+func (t *AgentTools) ExecuteConfirmed(
+	ctx context.Context,
+	role model.AgentRole,
+	name string,
+	args json.RawMessage,
+	confirmed *ConfirmedCall,
+) (any, error) {
 	allowed := ToolsForRole(role, t)
 	if len(allowed) == 0 {
 		return nil, ErrNoTools
@@ -153,7 +259,14 @@ func (t *AgentTools) Execute(ctx context.Context, role model.AgentRole, name str
 		if len(args) == 0 {
 			args = json.RawMessage(`{}`)
 		}
-		return tool.Handler(ctx, args)
+		if !tool.Mutating {
+			// 只读工具不接受确认参数。
+			// 传了也要忽略而不是执行：前端可能把上次的确认单误带到这次调用，
+			// 而"只读工具的参数"与"确认过的写操作参数"语义完全不同，
+			// 混用会让一次确认的作用范围悄悄扩大。
+			return tool.Handler(ctx, args)
+		}
+		return executeWithConfirmation(ctx, tool, args, confirmed)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrUnknownTool, name)
 }
@@ -165,15 +278,46 @@ func (t *AgentTools) Execute(ctx context.Context, role model.AgentRole, name str
 const agentToolMaxRows = 50
 
 // opsTools 返回运维角色的全部工具（本站唯一的带工具角色）。
+//
+// 【顺序即站长的排查动线，不要随意打乱】
+//
+//	先看有什么（渠道 / 令牌 / 用户）→ 再看状态（探针 / 日志 / 统计）
+//	→ 最后动手（改状态 / 改额度 / 封禁）。
+//	模型是按工具在列表里的顺序倾向去选的，
+//	把"查看"排在"修改"前面能降低它一上来就写库的概率。
 func opsTools(t *AgentTools) []Tool {
 	return []Tool{
+		// ── 只读：现状 ──
 		t.listChannelsTool(),
-		t.setChannelStatusTool(),
+		t.listChannelKeysTool(),
+		t.listTokensTool(),
+		t.listUsersTool(),
+		t.listOrdersTool(),
+		t.listAnnouncementsTool(),
+		t.listSensitiveWordsTool(),
+		t.getSiteSettingsTool(),
+		// ── 只读：诊断 ──
 		t.listChannelProbesTool(),
 		t.listUsageLogsTool(),
 		t.summarizeUsageTool(),
-		t.listUsersTool(),
-		t.listOrdersTool(),
+		t.getUserDetailTool(),
+		t.getChannelHealthTool(),
+		// ── 写：可逆的小改动（无需确认）──
+		// 这一档的共同判据是"错了能立刻改回来，且在改回来的路上没人会受损"：
+		// 停用渠道/令牌会被探针立刻发现，权重调错下次调用就纠正。
+		t.setChannelStatusTool(),
+		t.setChannelRoutingTool(),
+		t.setTokenStatusTool(),
+		// ── 写：需要站长点头 ──
+		// 这一档的共同判据是"受害者不在现场"：
+		// 被封的用户、被改额度的令牌、看到公告的全站用户，
+		// 都不会在操作发生的这一刻收到通知。
+		t.adjustTokenQuotaTool(),
+		t.setUserStatusTool(),
+		t.adjustUserQuotaTool(),
+		t.publishAnnouncementTool(),
+		t.addSensitiveWordsTool(),
+		t.setSiteSettingTool(),
 	}
 }
 
@@ -294,7 +438,12 @@ func (t *AgentTools) setChannelStatusTool() Tool {
 	"required": ["channel_id", "enabled"]
 }`),
 		Mutating: true,
-		Handler:  t.handleSetChannelStatus,
+		// 启停渠道直接执行：它可逆（再点一次就回来了）、
+		// 只影响一个渠道、且站长一眼能看出后果。
+		// 这类操作加确认只会把助手用成比后台菜单还麻烦的表单。
+		Confirm:      ConfirmNone,
+		ConfirmTitle: "切换渠道启用状态",
+		Handler:      t.handleSetChannelStatus,
 	}
 }
 

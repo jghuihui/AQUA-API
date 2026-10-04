@@ -19,7 +19,9 @@
 package server
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -47,16 +49,50 @@ var errAgentNotConfigured = errors.New("agent: 未接入依赖，功能未启用
 
 // buildAgentEngine 构造 agent 引擎；依赖不足时返回错误。
 //
-// 一次性构造而非每次请求新建：LLMClient 内部持有 HTTP 客户端，
-// 每次新建等于每次新建一个连接池——高频调用下会耗尽文件句柄。
-func (s *Server) buildAgentEngine() (*agent.Engine, error) {
+// 一次性构造而非每次请求新建：Engine 持有工具层（无状态），
+// 每次新建等于每次重建一套工具依赖——高频调用下是纯粹的浪费。
+//
+// ctx 来自惰性构建路径（agentEngine），那里没有请求上下文，
+// 传 context.Background() 是安全的：读一次配置失败也只是退回渠道。
+func (s *Server) buildAgentEngine(ctx context.Context) (*agent.Engine, error) {
 	if s.deps.Channels == nil || s.deps.ChannelKeys == nil {
 		// 没有渠道就选不出上游，没有密钥池就发不出请求。
 		// 这两项是模型转发的核心依赖，缺失说明部署不完整。
 		return nil, errAgentNotConfigured
 	}
-	llm := agent.NewLLMClient(s.deps.Channels, s.deps.ChannelKeys, agentUpstreamClient)
-	return agent.NewEngine(llm, s.agentToolDeps()), nil
+	endpoint, err := s.loadAgentEndpoint(ctx)
+	if err != nil {
+		slog.Warn("读取 agent 独立上游配置失败，本次改用站点渠道", "error", err)
+	}
+	return agent.NewEngine(s.buildAgentLLMClient(endpoint), s.agentToolDeps()), nil
+}
+
+// buildAgentLLMClient 构造上游调用器。
+//
+// 【为什么接收已读好的 endpoint，而不是自己再读一次】
+//
+//	一次对话要用到配置的【两个不同字段】：base_url + key（构造调用器）
+//	与 model（解析模型名）。若这两处各读一次库，就有两个问题：
+//	  1) 两次数据库往返，白白多一次；
+//	  2) 更要紧的是——站长若恰好在两次读之间改了配置，
+//	     就会出现"用 A 的密钥去请求 B 的模型"这种极难复现的不一致。
+//	因此由调用方读一次，把结果传进来。
+//
+// endpoint 为 nil（仓储未接入）或未配齐时，调用器内部会走借用渠道的旧路径。
+func (s *Server) buildAgentLLMClient(endpoint *model.AgentEndpoint) *agent.LLMClient {
+	client := agent.NewLLMClient(s.deps.Channels, s.deps.ChannelKeys, agentUpstreamClient)
+	if endpoint == nil {
+		return client
+	}
+	return client.WithEndpoint(endpoint)
+}
+
+// loadAgentEndpoint 读取独立上游配置；未接入仓储时返回 nil。
+func (s *Server) loadAgentEndpoint(ctx context.Context) (*model.AgentEndpoint, error) {
+	if s.deps.AgentEndpoint == nil {
+		return nil, nil
+	}
+	return s.deps.AgentEndpoint.Get(ctx)
 }
 
 // agentToolDeps 构造工具层所需的依赖集合。
@@ -75,6 +111,17 @@ func (s *Server) agentToolDeps() *agent.AgentTools {
 		Users:     s.deps.Users,
 		Orders:    s.deps.Orders,
 		Settings:  s.deps.Settings,
+		// 密钥池与令牌：工具集扩容后这两个仓储成为必需 ——
+		// 缺了它们 list_channel_keys 与全部令牌工具都会返回
+		// "本站未接入…"，而站长看到的是"功能坏了"而不是"没数据源"。
+		// 这两行是本轮扩容（2026-10-04）补上的，此前漏接。
+		ChannelKeys: s.deps.ChannelKeys,
+		Tokens:      s.deps.Tokens,
+		// 站点运营类工具（公告 / 敏感词 / 设置）同样必需：
+		// 缺了它们，助手会回答"本站未接入公告功能"，
+		// 而站长看到的是"功能坏了"而不是"没数据源"。
+		Announcements:  s.deps.Announcements,
+		SensitiveWords: s.deps.SensitiveWords,
 	}
 }
 
@@ -95,7 +142,7 @@ func agentSystemPrompt(settings model.AgentSettings, role model.AgentRole) strin
 // 之所以要缓存：每次请求重建 LLMClient 会新建连接池（见 buildAgentEngine）。
 func (s *Server) agentEngine() (*agent.Engine, error) {
 	s.agentOnce.Do(func() {
-		s.agent, s.agentErr = s.buildAgentEngine()
+		s.agent, s.agentErr = s.buildAgentEngine(context.Background())
 	})
 	return s.agent, s.agentErr
 }

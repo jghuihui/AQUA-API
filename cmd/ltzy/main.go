@@ -242,6 +242,9 @@ func run() error {
 	// AI Agent 密钥：运维（带工具）与客服（纯问答）两套入口各自鉴权。
 	// 刻意不复用 tokens——那张表的 key 能调任意模型 API，权限边界完全不同。
 	agentKeys := store.NewAgentKeyRepository(st.DB())
+	// agent 独立上游配置：不配就借用站点渠道，配了就用自己那套。
+	// API Key 以密文落库（与 SMTP 口令同一把加密器）。
+	agentEndpoint := store.NewAgentEndpointRepository(st.DB(), cipher)
 	// SMTP 配置仓储：口令以密文落库（加密器与渠道密钥同一个）。
 	smtpSettings := store.NewSMTPRepository(st.DB(), cipher)
 	// 额度预留台账：鉴权时预扣、响应后结算/退还，堵住并发超支漏洞。
@@ -548,6 +551,8 @@ func run() error {
 		ChannelProbeLogs: channelProbeLogs,
 		// AI Agent 密钥：agent 入口鉴权（运维 / 客服两套边界）
 		AgentKeys: agentKeys,
+		// nil-safe：未接入时 agent 退回"借用渠道"，行为与该特性出现前一致。
+		AgentEndpoint: agentEndpoint,
 		// 指标注册表：与告警派发器共用同一份，保证 /metrics 展示完整
 		Metrics: appMetrics,
 		// 敏感词表：/v1 入口的内容合规过滤

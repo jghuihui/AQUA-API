@@ -12,7 +12,7 @@
 //     而 agent 需要的是"解析后再决定下一步"——强行套用要构造一个假 ResponseWriter，
 //     那种代码读起来像hack，跑起来也容易在错误处理上出错；
 //  2. agent 的重试语义与 relay 不同（见 maxToolRounds），复用反而要加开关。
-//     因此这里独立实现，直��对齐 OpenAI 兼容协议。
+//     因此这里独立实现，直接对齐 OpenAI 兼容协议。
 //
 // 为什么不直接拿渠道行上的 APIKey：
 //
@@ -210,13 +210,31 @@ func (r *ChatResult) HasToolCalls() bool {
 }
 
 // LLMClient 是 agent 侧的上游调用器。
+//
+// 【两种取上游的方式，按优先级】
+//
+//  1. 独立上游（endpoint 已配齐）：直接用它，不碰站点渠道。
+//     好处有三：助手与业务流量不抢配额、可单独挑一个便宜/快的模型、
+//     可指向一个支持工具调用（tool_calls）的第三方上游。
+//  2. 借用站点渠道（endpoint 没配齐）：走 pickChannel。
+//     这是首次部署的默认路径，也保证"没配独立上游"的站点行为完全不变。
+//
+// 为什么 endpoint 挂在客户端上而不是 AskRequest：
+//
+//	它是"这个 agent 用哪个上游"的配置，属于调用器而非单次对话的参数。
+//	放进请求里会让每次组装 AskRequest 都多带一份与对话无关的字段，
+//	更糟的是它会让人误以为"不同轮次可以换上游"——实际上并不是。
 type LLMClient struct {
 	channels model.ChannelRepository
 	keys     model.ChannelKeyRepository
 	client   *http.Client
+
+	// endpoint 是站长为 agent 单独配的上游。
+	// 为 nil 或未配齐时（见 Configured）完全走借用渠道的旧路径。
+	endpoint *model.AgentEndpoint
 }
 
-// NewLLMClient 构造 LLM 客户端。
+// NewLLMClient 构造 LLM 客户端（借用渠道模式）。
 //
 // http 为 nil 时内部用默认客户端。
 func NewLLMClient(channels model.ChannelRepository, keys model.ChannelKeyRepository, client *http.Client) *LLMClient {
@@ -224,6 +242,20 @@ func NewLLMClient(channels model.ChannelRepository, keys model.ChannelKeyReposit
 		client = &http.Client{Timeout: agentUpstreamTimeout}
 	}
 	return &LLMClient{channels: channels, keys: keys, client: client}
+}
+
+// WithEndpoint 挂上独立上游配置，返回自身以便链式调用。
+//
+// 【为什么调用方每次都要新建 LLMClient】
+//
+// 服务器层用 sync.Once 缓存引擎（见 agent_wiring.go），而站长随时可能在
+// 后台改配置。因此绝不能"挂一次就当配置生效"——那会让改完配置必须重启
+// 服务才生效，而界面不会告诉站长这一点。
+// 每次请求重新构造客户端看起来浪费（实际只是几个字段赋值），
+// 换来的是"保存即生效"，这在后台配置类功能里是硬要求。
+func (c *LLMClient) WithEndpoint(endpoint *model.AgentEndpoint) *LLMClient {
+	c.endpoint = endpoint
+	return c
 }
 
 // 选渠道失败与取凭据失败的错误：分开定义以便上层给出不同提示。
@@ -254,7 +286,12 @@ func (c *LLMClient) ChatOnce(
 		return nil, errors.New("agent: 消息不能为空")
 	}
 
-	channel, apiKey, err := c.pickChannel(ctx, modelName)
+	// 【选上游：独立优先，其次借渠道】
+	//
+	// resolveUpstream 把"用哪个 base_url + 用哪把密钥"这件事收在一处，
+	// 因为这是本次唯一需要按配置分叉的决策。分成两段写的话，
+	// 将来加第三种方式（环境变量指定）就会有人在别处再分一次。
+	upstream, err := c.resolveUpstream(ctx, modelName)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +328,42 @@ func (c *LLMClient) ChatOnce(
 		reqBody.ToolChoice = "auto"
 	}
 
-	return c.doRequest(ctx, channel, apiKey, reqBody)
+	return c.doRequest(ctx, upstream.baseURL, upstream.apiKey, reqBody)
+}
+
+// agentUpstream 是本次调用实际要用的上游（地址 + 凭据）。
+//
+// 用它而不是直接返回 *model.Channel：独立上游模式下根本没有渠道实体，
+// 硬造一个假渠道出来会让"渠道"这个概念在代码里变得含义不明。
+type agentUpstream struct {
+	baseURL string
+	apiKey  string
+}
+
+// resolveUpstream 决定本次调用用哪个上游。
+//
+// 优先级：
+//  1. 独立上游已配齐（地址 + 密钥都有）→ 用它，完全不碰渠道；
+//  2. 否则退回借用渠道（旧路径，行为与加这个特性之前完全一致）。
+//
+// 为什么"配了一半"也退回渠道而不是报错：
+//
+//	站长很可能先填了地址、密钥稍后再粘。此时若直接报错，
+//	他会看到"助手坏了"，而实际上上一分钟它还好好的——
+//	报错会让一次未完成的配置变成一次服务中断。
+//	退回渠道既不中断，也符合直觉："没配完就还用老办法"。
+func (c *LLMClient) resolveUpstream(ctx context.Context, modelName string) (agentUpstream, error) {
+	if c.endpoint.Configured() {
+		return agentUpstream{
+			baseURL: strings.TrimSpace(c.endpoint.BaseURL),
+			apiKey:  strings.TrimSpace(c.endpoint.APIKey),
+		}, nil
+	}
+	channel, apiKey, err := c.pickChannel(ctx, modelName)
+	if err != nil {
+		return agentUpstream{}, err
+	}
+	return agentUpstream{baseURL: channel.BaseURL, apiKey: apiKey}, nil
 }
 
 // pickChannel 选一个支持该模型且启用的渠道，并取一把可用凭据。
@@ -379,9 +451,11 @@ func (c *LLMClient) pickChannel(ctx context.Context, modelName string) (*model.C
 }
 
 // doRequest 发一次 HTTP 请求并解析响应。
+//
+// baseURL 而非 *model.Channel：独立上游模式下没有渠道实体（见 agentUpstream）。
 func (c *LLMClient) doRequest(
 	ctx context.Context,
-	channel *model.Channel,
+	baseURL string,
 	apiKey string,
 	body chatRequest,
 ) (*ChatResult, error) {
@@ -390,7 +464,7 @@ func (c *LLMClient) doRequest(
 		return nil, fmt.Errorf("agent: 序列化请求失败: %w", err)
 	}
 
-	requestURL := joinUpstreamURL(channel.BaseURL, chatCompletionsPath)
+	requestURL := joinUpstreamURL(baseURL, chatCompletionsPath)
 	reqCtx, cancel := context.WithTimeout(ctx, agentUpstreamTimeout)
 	defer cancel()
 

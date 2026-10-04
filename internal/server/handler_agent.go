@@ -106,6 +106,42 @@ type agentChatRequest struct {
 	// 也可以塞入假 system 消息试图提权。安全处置见 buildMessages：
 	// system 消息一律丢弃，且只接受 user/assistant 两种角色。
 	History []agentChatTurn `json:"history"`
+	// Confirm 是"站长已确认某个写操作"的凭证，仅运维入口可用。
+	//
+	// 【为什么它必须在请求体里而不是会话状态】
+	//	确认是一次性的授权，不是可以复用的状态。存进会话意味着
+	//	"一次点确认之后，这个助手在本次登录期间都能改数据" ——
+	//	那与"让 AI 自己判断要不要问"一样危险。
+	//	放请求体里，它就只对这一次调用有效。
+	//
+	// 【Params 必须原样回传确认单里的那份】
+	//	服务端【不】校验它与本次模型提出的调用是否一致 ——
+	//	模型在新一轮里可能又提了个别的操作（多轮上下文摆动），
+	//	而确认过的应该仍是站长看到的那一次。
+	//	引擎侧只校验 tool_name 匹配，参数以确认单为准。
+	Confirm *confirmedAction `json:"confirm"`
+}
+
+// confirmedFollowUpHint 是"站长已确认"这件事告诉模型的话。
+//
+// 【为什么必须显式说，而不能让模型自己察觉】
+// 确认后重发的是同一句问题，模型看到的内容与上一次完全一样 ——
+// 它没有任何线索能看出"站长已经点头了"。若不说，它会重新走一遍
+// "我需要确认一下，要我发起吗？"的流程，站长点了确认却什么都没发生。
+//
+// 措辞上刻意不重复参数：参数在凭证里，模型调用时会拿到。
+// 这里只回答"该不该动手"这一个问题。
+func confirmedFollowUpHint(toolName string) string {
+	return "[系统通知]站长已经确认了 " + toolName + " 这个操作，" +
+		"现在请直接调用它完成，不要再询问是否要发起。"
+}
+
+// confirmedAction 是"已确认的写操作"凭证。
+type confirmedAction struct {
+	// ToolName 必须与本次要执行的工具名一致，否则拒绝。
+	ToolName string `json:"tool_name"`
+	// Params 是被展示给站长看过的那份参数，服务层不解析、原样传给引擎。
+	Params json.RawMessage `json:"params"`
 }
 
 // agentChatTurn 是历史里的一轮。
@@ -119,12 +155,19 @@ type agentChatTurn struct {
 // 用命名事件（event:）而非只发 data：前端可以只监听关心的事件类型，
 // 而不必在每个 data 上做字符串匹配来判断"这是正文还是工具状态"。
 type sseEvent struct {
-	// Type 取值：delta（正文增量）/ tool（工具执行）/ done（结束）/ error（出错）。
+	// Type 取值：delta（正文增量）/ tool（工具执行）/ confirm（待确认）/
+	// done（结束）/ error（出错）。
+	//
+	// confirm 独立于 error：它不是失败，而是"等你点头"。
+	// 前端据此弹窗而不是显示红色报错 —— 把"请确认"画成"出错了"，
+	// 会让站长误以为助手坏了。
 	Type string `json:"type"`
 	// Text 仅 delta 事件使用。
 	Text string `json:"text,omitempty"`
 	// Tool 仅 tool 事件使用。
 	Tool *sseToolEvent `json:"tool,omitempty"`
+	// Confirm 仅 confirm 事件使用：待确认操作的完整描述。
+	Confirm *agent.ConfirmationRequest `json:"confirm,omitempty"`
 	// Result 仅 done / error 事件使用。
 	Result *agentAskResultDTO `json:"result,omitempty"`
 	// Message 仅 error 事件使用（面向人的可读原因）。
@@ -182,6 +225,20 @@ func (s *Server) handleAgentChat(role model.AgentRole) gin.HandlerFunc {
 			return
 		}
 
+		// 独立上游配置本次对话只读一次：下面两处都要用它
+		// （构造调用器要 base_url + key，解析模型要 model）。
+		// 分两次读等于两次数据库往返，且配置若在这两次之间被改，
+		// 就会出现"用 A 的密钥请求 B 的模型"这种极难复现的不一致。
+		endpoint, endpointErr := s.loadAgentEndpoint(c.Request.Context())
+		if endpointErr != nil {
+			// 读失败不阻断：退回借用渠道，即该特性出现前的行为。
+			slog.Warn("读取 agent 独立上游配置失败，本次改用站点渠道", "error", endpointErr)
+		}
+
+		// 每次对话派生一个临时引擎，让上面读到的配置立即生效。
+		// 引擎本体是 sync.Once 缓存的，不改它就不会因为改配置而变化。
+		engine = engine.WithCaller(s.buildAgentLLMClient(endpoint))
+
 		var req agentChatRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			oai.WriteError(c.Writer, http.StatusBadRequest, "请求体格式错误",
@@ -226,7 +283,26 @@ func (s *Server) handleAgentChat(role model.AgentRole) gin.HandlerFunc {
 			return
 		}
 
-		modelName := s.resolveAgentModel(c, role, req.Model, settings)
+		// 【模型解析顺序】
+		//
+		// 运维入口：请求里指定的模型 > 独立上游的模型 > 运行配置的角色模型
+		// 客服入口：独立上游的模型 > 运行配置的角色模型（忽略请求里的）
+		//
+		// 独立上游优先于运行配置的理由：站长配独立上游的常见动机就是
+		// "给助手单独挑一个便宜/快的模型"。若让它被运行配置覆盖，
+		// 那份配置就成了摆设，而站长会以为"我明明填了却没用"。
+		//
+		// 只在独立上游【已配齐】时才算数：配了一半就回退渠道模型。
+		// 这里必须与 resolveUpstream 用同一个 Configured 判定，
+		// 否则会出现"拿独立上游的密钥去请求渠道的模型名"这种错配。
+		//
+		// 请求里的模型仍然对运维生效（那是排障时临时切换的入口），
+		// 但客服不能指定模型——否则任何人都能让站长付贵模型的钱（见
+		// resolveAgentModel 的注释）。因此这一段的短路必须按角色区分。
+		modelName := resolveEndpointModel(endpoint, role, req.Model)
+		if modelName == "" {
+			modelName = s.resolveAgentModel(c, role, req.Model, settings)
+		}
 		if modelName == "" {
 			// 没配模型就直接说清楚，而不是发一个必然失败的上游请求：
 			// 后者会在站长日志里留下一堆 400，掩盖真正的原因。
@@ -236,13 +312,42 @@ func (s *Server) handleAgentChat(role model.AgentRole) gin.HandlerFunc {
 			return
 		}
 
-		s.streamAgentAnswer(c, engine, agent.AskRequest{
+		askReq := agent.AskRequest{
 			Role:         role,
 			Model:        modelName,
 			SystemPrompt: agentSystemPrompt(settings, role),
 			History:      sanitizeAgentHistory(req.History),
 			Question:     question,
-		}, settings, role)
+		}
+		// 【只有运维入口能带确认凭证】
+		//
+		// 客服角色理论上拿不到任何工具（ToolsForRole 对 support 返回 nil），
+		// 因此凭证对它无用武之地。但显式拒绝比"传了也没用"好：
+		// 将来若给 support 加了某个带确认的工具，这条判断就是唯一的防线。
+		if req.Confirm != nil {
+			if role != model.AgentRoleOps {
+				oai.WriteError(c.Writer, http.StatusForbidden,
+					"在线客服不能执行需要确认的操作",
+					oai.TypePermission, "agent_confirm_not_allowed")
+				return
+			}
+			askReq.Confirmed = &agent.ConfirmedCall{
+				ToolName: req.Confirm.ToolName,
+				Params:   req.Confirm.Params,
+			}
+			// 【必须把"已确认"这件事告诉模型，否则凭证会被静默忽略】
+			//
+			// 确认后重发的是【同一句问题】，模型看不到任何"站长已经点头了"的线索，
+			// 于是会重新从头判断该不该做。实测中出现过"站长点了确认 →
+			// 助手回一句'要我发起这个改动吗'"的死循环：站长既没改成，也没得到解释。
+			//
+			// 放在 question 前面而不是塞进 History：buildMessages 把 question
+			// 放在消息序列的最后，追加到 History 里会让这句通知夹在历史中间，
+			// 读起来像"很久以前有人说的话"。而它描述的恰恰是刚刚发生的事。
+			askReq.Question = confirmedFollowUpHint(req.Confirm.ToolName) + "\n" + question
+		}
+
+		s.streamAgentAnswer(c, engine, askReq, settings, role)
 	}
 }
 
@@ -261,6 +366,9 @@ func (s *Server) streamAgentAnswer(
 	settings model.AgentSettings,
 	role model.AgentRole,
 ) {
+	// 确认请求在写响应头【之前】就要准备好能力 ——
+	// 但那时还没法知道模型会调什么工具，所以这里只挂回调，
+	// 真正发事件发生在流开始之后。
 	flusher, canFlush := c.Writer.(http.Flusher)
 	if !canFlush {
 		// 拿不到 Flusher 就无法流式。宁可明确报错，也不要"降级成一次性返回"：
@@ -295,6 +403,25 @@ func (s *Server) streamAgentAnswer(
 		writer.send(sseEvent{Type: "tool", Tool: &sseToolEvent{Name: name, Mutating: mutating}})
 	}
 
+	// 确认请求：引擎发现某个写操作需要站长点头时回调这里。
+	//
+	// 【这里只发事件，不做授权判断】
+	//	"要不要问"由工具声明（ConfirmAlways），"能不能问"由角色决定
+	//	（toolsForRole 对 support 返回空，两者都碰不到）。
+	//	server 层再判一次角色是多余的，且多一处判定就多一处可能不同步的地方。
+	//
+	// 【这里是 confirm 事件的唯一发送点】
+	//	引擎在挂上 OnConfirmRequired 的情况下走到"待确认"分支，
+	// 必然已经回调过上面这段（回调为 nil 时 executeWithConfirmation
+	// 会直接拒绝执行、根本不产生 PendingConfirmation）。
+	// 因此下面 PendingConfirmation 分支里【不要】再发一次 ——
+	// 前端会收到两个内容相同的 confirm 事件，弹窗被触发两次。
+	req.OnConfirmRequired = func(cr agent.ConfirmationRequest) {
+		slog.Info("agent 请求站长确认写操作",
+			"tool", cr.ToolName, "role", string(role))
+		writer.send(sseEvent{Type: "confirm", Confirm: &cr})
+	}
+
 	result, err := engine.Ask(ctx, req)
 	if err != nil {
 		slog.Warn("agent 对话失败", "error", err, "role", string(role))
@@ -302,6 +429,25 @@ func (s *Server) streamAgentAnswer(
 			Type:    "error",
 			Message: agentErrorMessage(err, role),
 		})
+		writer.close()
+		return
+	}
+
+	// 【待确认时这里必须停下，而不是继续走 done】
+	//
+	// 引擎在发现操作需要确认时会中断主循环并把状态放在
+	// PendingConfirmation 里。此时若照常发 done，前端会以为
+	// "助手答完了" 并把那句"该操作已提交给站长确认"当成最终答案，
+	// 而真正的确认弹窗被 done 事件盖过去 —— 表现为"什么都没发生"。
+	//
+	// 这里不发 done 也不发 error：这是一次"正常流程中的暂停"，
+	// confirm 事件已由上面的回调发出，前端据此弹窗并放开输入框。
+	// 若将来引擎改了行为、真的出现"有 PendingConfirmation 却没回调过"的情况，
+	// 那时前端拿不到弹窗 —— 与其在这里补发一个必然重复的事件，
+	// 不如让那条不变量被破坏时暴露出来（见 internal/agent 的相关测试）。
+	if result.PendingConfirmation != nil {
+		slog.Info("agent 停在等待站长确认",
+			"tool", result.PendingConfirmation.ToolName, "role", string(role))
 		writer.close()
 		return
 	}
@@ -336,6 +482,41 @@ func (s *Server) resolveAgentModel(
 		return name
 	}
 	return strings.TrimSpace(settings.DefaultModel)
+}
+
+// resolveEndpointModel 从独立上游配置里取本次要用的模型名，取不到则返回空串。
+//
+// 【与 resolveUpstream 必须用同一个"配齐"判定】
+//
+// 这里若用"endpoint != nil"或"BaseURL 非空"来判断，而 agent 包里的
+// resolveUpstream 用的是 Configured()（要求地址与密钥都齐），
+// 就会出现一个极难排查的错配：拿独立上游的密钥去请求渠道的模型名。
+// 两种判定的差别只有"配了一半"这一种情况，而那恰恰是最容易发生的
+// （站长先填地址、密钥稍后再粘）。所以这里复用同一个方法。
+//
+// 【角色差异：运维可临时指定模型，客服不行】
+//
+// 与 resolveAgentModel 的理由相同——允许外部人指定模型等于让他决定
+// 站长付哪个模型的钱。见该函数的注释。
+func resolveEndpointModel(
+	endpoint *model.AgentEndpoint,
+	role model.AgentRole,
+	requested string,
+) string {
+	// 运维请求里指定的模型先判，且【不受配置是否配齐影响】：
+	// 它是站长明确指定的一个模型名，与"上游是谁"无关。
+	// 放在 Configured 判定之后会让"没配独立上游"这件事
+	// 顺带废掉临时切模型的能力——而那恰恰是排障时最需要它的时候。
+	if role == model.AgentRoleOps {
+		if name := strings.TrimSpace(requested); name != "" {
+			return name
+		}
+	}
+	// 客服不接受请求里的模型：见 resolveAgentModel 的理由。
+	if !endpoint.Configured() {
+		return ""
+	}
+	return strings.TrimSpace(endpoint.Model)
 }
 
 // sanitizeAgentHistory 清洗客户端上报的历史对话。

@@ -82,13 +82,21 @@ export class ApiError extends Error {
   readonly code: string
   /** 后端错误类型，如 invalid_request_error */
   readonly type: string
+  /**
+   * 出错字段名；空串表示后端未做字段级定位。
+   *
+   * 存在的理由：表单一次要提交十几个参数，
+   * 「某个参数填错了」这种提示会让站长逐个试。
+   */
+  readonly field: string
 
-  constructor(message: string, status = 0, code = '', type = '') {
+  constructor(message: string, status = 0, code = '', type = '', field = '') {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
     this.type = type
+    this.field = field
   }
 
   /** 是否为「未登录/会话失效」类错误 */
@@ -174,7 +182,13 @@ function toApiError(error: unknown): ApiError {
 
   const { status, data } = axiosError.response
   const message = data?.error?.message || FALLBACK_MESSAGE[status] || `请求失败（HTTP ${status}）`
-  return new ApiError(message, status, data?.error?.code ?? '', data?.error?.type ?? '')
+  return new ApiError(
+    message,
+    status,
+    data?.error?.code ?? '',
+    data?.error?.type ?? '',
+    data?.error?.field ?? '',
+  )
 }
 
 /** 内部请求实现：附加令牌 → 统一错误转换 → 401 集中处理 */

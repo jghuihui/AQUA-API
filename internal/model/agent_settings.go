@@ -208,4 +208,3 @@ func clampText(s string, limit int) string {
 func parseBoolLenient(v string) (bool, error) {
 	return strconv.ParseBool(strings.TrimSpace(v))
 }
-
